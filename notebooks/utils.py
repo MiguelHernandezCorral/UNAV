@@ -1,5 +1,7 @@
 import pandas as pd
-
+import numpy as np
+import seaborn as sns
+import matplotlib as plt
 def analisis_na_por_columna(df: pd.DataFrame) -> pd.DataFrame:
     """
     Recibe un DataFrame y devuelve un DataFrame con:
@@ -73,8 +75,55 @@ def crear_target(oportunidad: pd.DataFrame, historial_etapas: pd.DataFrame) -> p
     )
     
     return oportunidad
-
 import pandas as pd
+
+def crear_target_auditado(oportunidad: pd.DataFrame, historial_etapas: pd.DataFrame) -> pd.DataFrame:
+    print("--- INICIANDO AUDITORÍA DE INTEGRIDAD ---")
+    
+    # 1. Análisis de Intersección (Venn Diagram Logic)
+    ids_oportunidad = set(oportunidad['ID'].unique())
+    ids_historial = set(historial_etapas['LK_Oportunidad__c'].unique())
+    
+    comunes = ids_oportunidad.intersection(ids_historial)
+    solo_oportunidad = ids_oportunidad - ids_historial
+    solo_historial = ids_historial - ids_oportunidad
+    
+    print(f"Total IDs en Maestro Oportunidades: {len(ids_oportunidad)}")
+    print(f"Total IDs en Historial Etapas: {len(ids_historial)}")
+    print(f"✅ Coincidencias exactas: {len(comunes)}")
+    print(f"⚠️ IDs en Maestro pero SIN historial: {len(solo_oportunidad)} (Posibles registros huérfanos)")
+    print(f"⚠️ IDs en Historial pero NO en Maestro: {len(solo_historial)} (Oportunidades eliminadas o filtradas)")
+
+    # 2. Detección de Duplicados
+    dups_master = oportunidad['ID'].duplicated().sum()
+    if dups_master > 0:
+        print(f"❌ ¡ATENCIÓN!: Tienes {dups_master} duplicados en el DataFrame Maestro.")
+
+    # 3. Lógica de Target (Optimizada con Isin para velocidad)
+    matricula_formalizada = set(historial_etapas[
+        (historial_etapas['PL_Etapa__c'] == 'Matrícula OOGG') &
+        (historial_etapas['PL_Subetapa__c'] == 'Formalizada')
+    ]['LK_Oportunidad__c'].unique())
+    
+    desmatriculado = set(historial_etapas[
+        historial_etapas['PL_Subetapa__c'] == 'Desmatriculado'
+    ]['LK_Oportunidad__c'].unique())
+    
+    # Calculamos el target usando conjuntos (sets), que es mucho más rápido que .apply(lambda)
+    # Target = 1 si está en formalizados Y NO en desmatriculados
+    ids_target_1 = matricula_formalizada - desmatriculado
+    
+    oportunidad['target'] = oportunidad['ID'].isin(ids_target_1).astype(int)
+    
+    # 4. Resumen Final
+    total_matriculas = oportunidad['target'].sum()
+    print(f"\n--- RESUMEN TARGET ---")
+    print(f"Matrículas Finales (Target=1): {total_matriculas}")
+    print(f"Tasa de Conversión Total: {round(total_matriculas / len(oportunidad) * 100, 2)}%")
+    
+    return oportunidad
+
+
 
 def calcular_tiempos_etapas(historial_etapas: pd.DataFrame) -> pd.DataFrame:
     """
@@ -225,6 +274,8 @@ def integrar_actividades_progresivo_por_curso(df_master, df_actividades):
     
     print("✅ Proceso completado.")
     return resultado
+    
+import matplotlib.pyplot as plt
 
 def graficar_top_por_acceso(df, top_n=5):
     # 1. Agrupar y contar oportunidades únicas
@@ -259,3 +310,5 @@ def graficar_top_por_acceso(df, top_n=5):
 
     plt.tight_layout()
     plt.show()
+import pandas as pd
+
