@@ -177,11 +177,10 @@ def limpiar_historial_por_hitos(df_historial, df_principal):
     # 4. Merge: Unir el historial con las fechas de sus propios hitos
     df_merge = pd.merge(df_historial, hito_acad, on='LK_Oportunidad__c', how='left')
     df_merge = pd.merge(df_merge, hito_econ, on='LK_Oportunidad__c', how='left')
-    
+
     # 5. Merge: Traer las columnas del df_principal (académicas y económicas)
-    # Unimos por ID de oportunidad
     df_final = pd.merge(df_merge, df_principal, left_on='LK_Oportunidad__c', right_on='ID', how='left')
-    
+
     # 6. Definición de grupos de columnas
     cols_academicas = [
         'NU_NOTA_MEDIA_ADMISION', 'CH_PRUEBAS_CALIFICADAS', 
@@ -310,5 +309,82 @@ def graficar_top_por_acceso(df, top_n=5):
 
     plt.tight_layout()
     plt.show()
-import pandas as pd
 
+def analizar_cruce_target(
+    df_final: pd.DataFrame,
+    historial_etapas: pd.DataFrame,
+    col_fecha: str = "fecha",
+    col_target: str = "target",
+    devolver_mejor: bool = True
+):
+    """
+    Analiza distintas estrategias de cruce entre df_final e historial_etapas,
+    evaluando NaNs, cobertura y pérdida de registros.
+    """
+ 
+    df_final = df_final.copy()
+    historial = historial_etapas.copy()
+ 
+    df_final[col_fecha] = pd.to_datetime(df_final[col_fecha])
+    historial[col_fecha] = pd.to_datetime(historial[col_fecha])
+ 
+    historial = historial.sort_values(col_fecha)
+    df_final = df_final.sort_values(col_fecha)
+ 
+    n_base = len(df_final)
+    resultados = []
+ 
+    # --------------------------------------------------
+    # 1. MERGE EXACTO
+    # --------------------------------------------------
+    m1 = df_final.merge(
+        historial,
+        left_on="ID",
+        right_on="LK_Oportunidad__c",
+        how="left"
+    )
+ 
+    resultados.append({
+        "estrategia": "merge_exacto",
+        "n_total": len(m1),
+        "n_target_ok": m1[col_target].notna().sum(),
+        "na_target": m1[col_target].isna().sum(),
+        "pct_na": m1[col_target].isna().mean(),
+        "pct_cobertura": m1[col_target].notna().mean()
+    })
+ 
+    # --------------------------------------------------
+    # 2. MERGE + FORWARD FILL
+    # --------------------------------------------------
+    m2 = m1.copy()
+    m2[col_target] = m2[col_target].ffill()
+ 
+    resultados.append({
+        "estrategia": "merge + ffill",
+        "n_total": len(m2),
+        "n_target_ok": m2[col_target].notna().sum(),
+        "na_target": m2[col_target].isna().sum(),
+        "pct_na": m2[col_target].isna().mean(),
+        "pct_cobertura": m2[col_target].notna().mean()
+    })
+ 
+    resumen = (
+        pd.DataFrame(resultados)
+        .sort_values(
+            ["pct_na", "pct_cobertura"],
+            ascending=[True, False]
+        )
+        .reset_index(drop=True)
+    )
+ 
+    if not devolver_mejor:
+        return resumen
+ 
+    mejor = resumen.iloc[0]["estrategia"]
+ 
+    mapas = {
+        "merge_exacto": m1,
+        "merge + ffill": m2    
+    }
+ 
+    return resumen, mapas[mejor]
