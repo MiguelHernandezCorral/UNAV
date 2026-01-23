@@ -388,3 +388,25 @@ def analizar_cruce_target(
     }
  
     return resumen, mapas[mejor]
+
+def analizar_integridad_cruce(df_maestro, df_economico, df_resultado):
+    print("--- ANÁLISIS DE INTERSECCIÓN ---")
+    ids_maestro = set(df_maestro['ID'].unique())
+    ids_ecb = set(df_economico['LK_oportunidad__c'].unique())
+    coincidentes = ids_maestro.intersection(ids_ecb)
+    solo_maestro = ids_maestro - ids_ecb
+    solo_ecb = ids_ecb - ids_maestro
+    print(f"1. Oportunidades en df_final_v3: {len(ids_maestro)}")
+    print(f"2. Oportunidades con datos en ECB: {len(ids_ecb)}")
+    print(f"✅ Coincidencias (Oportunidades con info económica): {len(coincidentes)}")
+    print(f"⚠️ Oportunidades SIN info económica (Solo Maestro): {len(solo_maestro)}")
+    print(f"⚠️ IDs en ECB que no existen en el Maestro: {len(solo_ecb)}")
+    print("\n--- COMPROBACIÓN DE TARGETS ---")
+    # Comprobar si hay nulos en la columna target tras el cruce
+    nulos_target = df_resultado['target'].isna().sum()
+    if nulos_target > 0:
+        print(f"❌ ¡ALERTA!: Hay {nulos_target} registros con TARGET a NA.")
+        print("Esto podría deberse a IDs en el maestro que no tenían target asignado previamente.")
+    else:
+        print("✅ No se han detectado TARGETS a NA. El dataset es consistente.")
+ 
