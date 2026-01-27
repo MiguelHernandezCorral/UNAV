@@ -1,7 +1,5 @@
 import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib as plt
+
 def analisis_na_por_columna(df: pd.DataFrame) -> pd.DataFrame:
     """
     Recibe un DataFrame y devuelve un DataFrame con:
@@ -75,55 +73,8 @@ def crear_target(oportunidad: pd.DataFrame, historial_etapas: pd.DataFrame) -> p
     )
     
     return oportunidad
+
 import pandas as pd
-
-def crear_target_auditado(oportunidad: pd.DataFrame, historial_etapas: pd.DataFrame) -> pd.DataFrame:
-    print("--- INICIANDO AUDITORÍA DE INTEGRIDAD ---")
-    
-    # 1. Análisis de Intersección (Venn Diagram Logic)
-    ids_oportunidad = set(oportunidad['ID'].unique())
-    ids_historial = set(historial_etapas['LK_Oportunidad__c'].unique())
-    
-    comunes = ids_oportunidad.intersection(ids_historial)
-    solo_oportunidad = ids_oportunidad - ids_historial
-    solo_historial = ids_historial - ids_oportunidad
-    
-    print(f"Total IDs en Maestro Oportunidades: {len(ids_oportunidad)}")
-    print(f"Total IDs en Historial Etapas: {len(ids_historial)}")
-    print(f"✅ Coincidencias exactas: {len(comunes)}")
-    print(f"⚠️ IDs en Maestro pero SIN historial: {len(solo_oportunidad)} (Posibles registros huérfanos)")
-    print(f"⚠️ IDs en Historial pero NO en Maestro: {len(solo_historial)} (Oportunidades eliminadas o filtradas)")
-
-    # 2. Detección de Duplicados
-    dups_master = oportunidad['ID'].duplicated().sum()
-    if dups_master > 0:
-        print(f"❌ ¡ATENCIÓN!: Tienes {dups_master} duplicados en el DataFrame Maestro.")
-
-    # 3. Lógica de Target (Optimizada con Isin para velocidad)
-    matricula_formalizada = set(historial_etapas[
-        (historial_etapas['PL_Etapa__c'] == 'Matrícula OOGG') &
-        (historial_etapas['PL_Subetapa__c'] == 'Formalizada')
-    ]['LK_Oportunidad__c'].unique())
-    
-    desmatriculado = set(historial_etapas[
-        historial_etapas['PL_Subetapa__c'] == 'Desmatriculado'
-    ]['LK_Oportunidad__c'].unique())
-    
-    # Calculamos el target usando conjuntos (sets), que es mucho más rápido que .apply(lambda)
-    # Target = 1 si está en formalizados Y NO en desmatriculados
-    ids_target_1 = matricula_formalizada - desmatriculado
-    
-    oportunidad['target'] = oportunidad['ID'].isin(ids_target_1).astype(int)
-    
-    # 4. Resumen Final
-    total_matriculas = oportunidad['target'].sum()
-    print(f"\n--- RESUMEN TARGET ---")
-    print(f"Matrículas Finales (Target=1): {total_matriculas}")
-    print(f"Tasa de Conversión Total: {round(total_matriculas / len(oportunidad) * 100, 2)}%")
-    
-    return oportunidad
-
-
 
 def calcular_tiempos_etapas(historial_etapas: pd.DataFrame) -> pd.DataFrame:
     """
@@ -177,10 +128,11 @@ def limpiar_historial_por_hitos(df_historial, df_principal):
     # 4. Merge: Unir el historial con las fechas de sus propios hitos
     df_merge = pd.merge(df_historial, hito_acad, on='LK_Oportunidad__c', how='left')
     df_merge = pd.merge(df_merge, hito_econ, on='LK_Oportunidad__c', how='left')
-
+    
     # 5. Merge: Traer las columnas del df_principal (académicas y económicas)
+    # Unimos por ID de oportunidad
     df_final = pd.merge(df_merge, df_principal, left_on='LK_Oportunidad__c', right_on='ID', how='left')
-
+    
     # 6. Definición de grupos de columnas
     cols_academicas = [
         'NU_NOTA_MEDIA_ADMISION', 'CH_PRUEBAS_CALIFICADAS', 
@@ -273,8 +225,6 @@ def integrar_actividades_progresivo_por_curso(df_master, df_actividades):
     
     print("✅ Proceso completado.")
     return resultado
-    
-import matplotlib.pyplot as plt
 
 def graficar_top_por_acceso(df, top_n=5):
     # 1. Agrupar y contar oportunidades únicas
@@ -309,104 +259,3 @@ def graficar_top_por_acceso(df, top_n=5):
 
     plt.tight_layout()
     plt.show()
-
-def analizar_cruce_target(
-    df_final: pd.DataFrame,
-    historial_etapas: pd.DataFrame,
-    col_fecha: str = "fecha",
-    col_target: str = "target",
-    devolver_mejor: bool = True
-):
-    """
-    Analiza distintas estrategias de cruce entre df_final e historial_etapas,
-    evaluando NaNs, cobertura y pérdida de registros.
-    """
- 
-    df_final = df_final.copy()
-    historial = historial_etapas.copy()
- 
-    df_final[col_fecha] = pd.to_datetime(df_final[col_fecha])
-    historial[col_fecha] = pd.to_datetime(historial[col_fecha])
- 
-    historial = historial.sort_values(col_fecha)
-    df_final = df_final.sort_values(col_fecha)
- 
-    n_base = len(df_final)
-    resultados = []
- 
-    # --------------------------------------------------
-    # 1. MERGE EXACTO
-    # --------------------------------------------------
-    m1 = df_final.merge(
-        historial,
-        left_on="ID",
-        right_on="LK_Oportunidad__c",
-        how="left"
-    )
- 
-    resultados.append({
-        "estrategia": "merge_exacto",
-        "n_total": len(m1),
-        "n_target_ok": m1[col_target].notna().sum(),
-        "na_target": m1[col_target].isna().sum(),
-        "pct_na": m1[col_target].isna().mean(),
-        "pct_cobertura": m1[col_target].notna().mean()
-    })
- 
-    # --------------------------------------------------
-    # 2. MERGE + FORWARD FILL
-    # --------------------------------------------------
-    m2 = m1.copy()
-    m2[col_target] = m2[col_target].ffill()
- 
-    resultados.append({
-        "estrategia": "merge + ffill",
-        "n_total": len(m2),
-        "n_target_ok": m2[col_target].notna().sum(),
-        "na_target": m2[col_target].isna().sum(),
-        "pct_na": m2[col_target].isna().mean(),
-        "pct_cobertura": m2[col_target].notna().mean()
-    })
- 
-    resumen = (
-        pd.DataFrame(resultados)
-        .sort_values(
-            ["pct_na", "pct_cobertura"],
-            ascending=[True, False]
-        )
-        .reset_index(drop=True)
-    )
- 
-    if not devolver_mejor:
-        return resumen
- 
-    mejor = resumen.iloc[0]["estrategia"]
- 
-    mapas = {
-        "merge_exacto": m1,
-        "merge + ffill": m2    
-    }
- 
-    return resumen, mapas[mejor]
-
-def analizar_integridad_cruce(df_maestro, df_economico, df_resultado):
-    print("--- ANÁLISIS DE INTERSECCIÓN ---")
-    ids_maestro = set(df_maestro['ID'].unique())
-    ids_ecb = set(df_economico['LK_oportunidad__c'].unique())
-    coincidentes = ids_maestro.intersection(ids_ecb)
-    solo_maestro = ids_maestro - ids_ecb
-    solo_ecb = ids_ecb - ids_maestro
-    print(f"1. Oportunidades en df_final_v3: {len(ids_maestro)}")
-    print(f"2. Oportunidades con datos en ECB: {len(ids_ecb)}")
-    print(f"✅ Coincidencias (Oportunidades con info económica): {len(coincidentes)}")
-    print(f"⚠️ Oportunidades SIN info económica (Solo Maestro): {len(solo_maestro)}")
-    print(f"⚠️ IDs en ECB que no existen en el Maestro: {len(solo_ecb)}")
-    print("\n--- COMPROBACIÓN DE TARGETS ---")
-    # Comprobar si hay nulos en la columna target tras el cruce
-    nulos_target = df_resultado['target'].isna().sum()
-    if nulos_target > 0:
-        print(f"❌ ¡ALERTA!: Hay {nulos_target} registros con TARGET a NA.")
-        print("Esto podría deberse a IDs en el maestro que no tenían target asignado previamente.")
-    else:
-        print("✅ No se han detectado TARGETS a NA. El dataset es consistente.")
- 
