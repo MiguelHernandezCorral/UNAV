@@ -105,7 +105,7 @@ def calcular_tiempos_etapas(historial_etapas: pd.DataFrame) -> pd.DataFrame:
     return historial_etapas
 
 
-
+import numpy as np
 def limpiar_historial_por_hitos(df_historial, df_principal):
     # 1. Asegurar formato datetime
     df_historial['CreatedDate'] = pd.to_datetime(df_historial['CreatedDate'])
@@ -226,6 +226,8 @@ def integrar_actividades_progresivo_por_curso(df_master, df_actividades):
     print("✅ Proceso completado.")
     return resultado
 
+import matplotlib.pyplot as plt
+import seaborn as sns
 def graficar_top_por_acceso(df, top_n=5):
     # 1. Agrupar y contar oportunidades únicas
     df_counts = df.groupby(['PL_ORIGEN_DE_SOLICITUD', 'TITULACION_DEF', 'target'])['ID'].nunique().reset_index()
