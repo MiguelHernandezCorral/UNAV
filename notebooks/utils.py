@@ -73,6 +73,9 @@ def crear_target(oportunidad: pd.DataFrame, historial_etapas: pd.DataFrame) -> p
     oportunidad['target'] = oportunidad['ID'].apply(
         lambda x: 1 if (x in matricula_formalizada and x not in desmatriculado) else 0
     )
+    oportunidad['desmatriculado'] = oportunidad['ID'].apply(
+        lambda x: 1 if (x in desmatriculado) else 0
+    )
     
     return oportunidad
 import pandas as pd
