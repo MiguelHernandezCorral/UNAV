@@ -5440,3 +5440,16 @@ Alternately, you can install this by running `pip install pycaret[models]`
                                     warm_start=False))],
          verbose=False)
 2026-01-29 16:20:00,988:INFO:save_model() successfully completed......................................
+2026-01-29 17:15:41,175:INFO:Initializing plot_model()
+2026-01-29 17:15:41,178:INFO:plot_model(self=<pycaret.classification.oop.ClassificationExperiment object at 0x0000024816D447D0>, estimator=LogisticRegression(C=1.0, class_weight=None, dual=False, fit_intercept=True,
+                   intercept_scaling=1, l1_ratio=None, max_iter=1000,
+                   multi_class='auto', n_jobs=None, penalty='l2',
+                   random_state=42, solver='lbfgs', tol=0.0001, verbose=0,
+                   warm_start=False), plot=rfe, scale=1, save=False, fold=StratifiedKFold(n_splits=3, random_state=None, shuffle=False), fit_kwargs={}, plot_kwargs=None, groups=None, feature_name=None, label=False, verbose=False, system=True, display=None, display_format=None)
+2026-01-29 17:15:41,179:INFO:Checking exceptions
+2026-01-29 17:15:41,218:INFO:Preloading libraries
+2026-01-29 17:15:41,219:INFO:Copying training dataset
+2026-01-29 17:15:41,219:INFO:Plot type: rfe
+2026-01-29 17:15:41,446:INFO:Fitting Model
+2026-01-29 17:15:44,103:INFO:Visual Rendered Successfully
+2026-01-29 17:15:44,349:INFO:plot_model() successfully completed......................................
