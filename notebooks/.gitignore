@@ -42,3 +42,5 @@ env/
 # =========================
 .DS_Store
 Thumbs.db
+
+logs.log
