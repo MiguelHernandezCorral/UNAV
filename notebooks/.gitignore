@@ -44,3 +44,4 @@ env/
 Thumbs.db
 
 logs.log
+datos/04. Modelos/*.pkl
