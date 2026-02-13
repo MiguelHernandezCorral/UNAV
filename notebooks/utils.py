@@ -173,7 +173,7 @@ def limpiar_historial_por_hitos(df_historial, df_principal):
     # 3. Obtener la fecha del Hito Económico (Matrícula iniciada)
     hito_econ = df_historial[
         (df_historial['PL_Etapa__c'] == 'Matrícula admisión') & 
-        (df_historial['PL_Subetapa__c'] == 'Pago Mínimo')
+        (df_historial['PL_Subetapa__c'] == 'Pago mínimo')
     ].groupby('LK_Oportunidad__c')['CreatedDate'].min().reset_index()
     hito_econ.columns = ['LK_Oportunidad__c', 'fecha_matricula_iniciada']
     
