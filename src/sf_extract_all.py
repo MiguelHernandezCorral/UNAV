@@ -1,0 +1,407 @@
+"""
+sf_extract_all.py
+=================
+Extrae todas las entidades necesarias desde Salesforce y las guarda en CSV.
+
+Entidades extraídas:
+  1. Opportunity               → opportunity.csv
+  2. Account                   → account.csv
+  3. EstudioCosteBecas__c      → ecbs.csv
+  4. BASF_Solicitud__c         → solban.csv
+  5. Case                      → cases.csv
+  6. IndividualEmailResult__c  → email_results.csv
+  7. CampaignMember            → activity_history.csv
+  8. OpportunityFieldHistory   → opp_field_history.csv
+  9. Pago__c                   → pagos.csv
+
+Uso:
+    python src/sf_extract_all.py
+    python src/sf_extract_all.py --output /ruta/salida
+"""
+
+import os
+import sys
+import argparse
+import logging
+import pandas as pd
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+
+sys.path.insert(0, str(Path(__file__).parent))
+from sf_extractor import SalesforceExtractor
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Filtro base reutilizable (curso + tipos de record)
+# ---------------------------------------------------------------------------
+CURSO = "2026/2027"
+RECORD_TYPES = (
+    "('Solicitud Admisi\u00f3n Grado', "
+    "'Solicitud Admisi\u00f3n M\u00e1ster', "
+    "'Solicitud Matricula Grado', "
+    "'Solicitud Matricula M\u00e1ster')"
+)
+
+# Subquery de Opportunity reutilizada en varios FROM
+_OPP_SUBQUERY = (
+    f"SELECT id FROM Opportunity "
+    f"WHERE PL_Curso_academico__c = '{CURSO}' "
+    f"AND RecordType.name IN {RECORD_TYPES}"
+)
+
+# ---------------------------------------------------------------------------
+# Definición de todas las queries
+# ---------------------------------------------------------------------------
+QUERIES: list[tuple[str, str]] = [
+
+    # 1 · Opportunity
+    ("opportunity", f"""
+        SELECT Id, AccountId, TX_Num_Credencial__c, PL_Curso_academico__c,
+            PL_Mes_Anio_inicio__c, PL_Tipo_Acceso__c, RecordTypeId, RecordType.name,
+            PL_Estado__c, StageName, PL_Subetapa__c, Estado_Matricula__c,
+            CH_Simultaneidad__c, CH_Completa__c, Cambia_de_carrera__c,
+            PL_Gestionado_por__c, CH_Nacional__c, CH_Internacional__c,
+            PL_Origen_de_solicitud__c, PL_Formato__c, CH_Origen_admision__c,
+            CloseDate, LeadSource, PL_Origen_formulario__c, PL_Plazo_admision__c,
+            LK_Calendario_de_admision__c, LK_Calendario_de_admision__r.name,
+            LK_Calendario_de_admision_final__c, LK_Calendario_de_admision_final__r.name,
+            ConvocatoriaNombre__c, NU_Nota_media_admision__c, CH_Pruebas_calificadas__c,
+            NU_Resultado_admision_puntos__c, CH_StandBy__c, FOR_Estado_tipo_documento__c,
+            DT_Fecha_propuesta_resolucion_facultad__c, DT_Nueva_fecha_resolucion_candidato__c,
+            NU_Preferencia__c, LK_Titulacion__c, LK_Titulacion__r.name,
+            LK_Titulacion_definitiva__c, LK_Titulacion_definitiva__r.name,
+            LK_Titulacion_por_curso_academico__c, LK_Titulacion_por_curso_academico__r.name,
+            LK_Titulacion_por_curso_academico_final__c, LK_Titulacion_por_curso_academico_final__r.name,
+            PL_Resolucion_definitiva__c, PL_Resolucion_inicial__c,
+            CH_Titulacion_reorientacion__c, RES_Titulaciones_reorientacion__c,
+            CH_Carta_enviada__c, TX_Observaciones_facultad__c, TX_Observaciones_delegado__c,
+            ObservacionesAdmision__c, TX_Observaciones_admision__c, Description__c,
+            ObservacionesDeCondicionado__c, ObservacionesDeDenegado__c,
+            PL_Motivo_cancelacion__c, TX_Motivo_cancelacion__c,
+            Observacionesmaster__c, Observacionesresolucion__c, PL_Curso_actual__c,
+            LK_CentroEnsenanza__c, LK_CentroEnsenanza__r.name,
+            TX_Pais_CentroEnsenanza__c, TX_Provincia_CentroEnsenanza__c,
+            TX_Localidad_CentroEnsenanza__c, TX_OtroCentroEnsenanza__c,
+            PL_Modalidad_de_acceso__c, PL_Selectividad_UPNA_TrasladoEXP__c,
+            CH_Matricula_de_curso_anterior__c, CU_Importe_total__c,
+            ImportePrimerPago__c, FechaLimitePrimerPago__c,
+            MinimumPaymentPayed__c, MinimumPaymentDate__c,
+            Paid_Amount__c, Paid_Percent__c, CH_Pago_superior__c,
+            Importe_minimo_personalizado__c, LK_Descuento_Pronto_Pago__c,
+            NU_Importe_descuento_pronto_pago__c, NU_Porcentaje_descuento_pronto_pago__c,
+            DT_Fecha_creacion_SA__c, DT_Fecha_envio_SA__c,
+            DT_Fecha_Publicacion_resolucion__c, DT_Fech_fin_plazo__c,
+            TX_Beca_solicitada__c, CH_Matricula_sujeta_beca__c,
+            Motivomaster__c, TX_Motivo_solicitud__c,
+            PL_Valoracion_estudio_postgrado__c, Fech_Definitiva_Valoraci_n__c,
+            TX_Motivo_valoracion__c, ProbabilidadMatriculaDelegado__c,
+            DT_Dia_hora_cita__c, CH_Informacion_enviada__c, CH_Conditioned__c,
+            CH_Solicita_Alojamiento__c, noContabilizable__c,
+            PL_Modalidad_examen_acceso_escogido__c, Kitdevisado__c, FechenvioKit__c,
+            DT_Fecha_inicio_Matricula_admision__c, DT_Fecha_fin_Matricula_admision__c,
+            DT_Fecha_inicio_Matricula_OOGG__c, DT_Fecha_fin_matricula_OOGG__c,
+            NU_PasoMax__c, NU_Paso_solicitud_admision__c,
+            CH_Acepto_condiciones_matricula__c, DT_Fecha_Acepta_cond_matr__c,
+            PL_Domicilio_durante_curso__c,
+            LK_Colegio_M_Residencia_durante_curso__c,
+            LK_Colegio_M_Residencia_durante_curso__r.name, OwnerId
+        FROM Opportunity
+        WHERE PL_Curso_academico__c = '{CURSO}'
+        AND RecordType.name IN {RECORD_TYPES}
+    """),
+
+    # 2 · Account
+    ("account", f"""
+        SELECT ID18__c, ID18__pc, PersonBirthdate, PL_Sexo__pc,
+            LK_Nacionalidad__pc, LK_Nacionalidad__pr.name,
+            FOR_Pais_de_nacimiento__pc, FOR_Provincia_de_nacimiento__pc,
+            TX_Localidad_Nacimiento__pc, PersonMobilePhone,
+            CH_Ayuda_financiacion__c, CH_Familia_numerosa__pc,
+            PL_Tipo_familia_numerosa__pc, NU_Miembros_familia__pc,
+            NU_NumeroHijos__pc, PL_Minusvalia__pc, TX_Grado_minusvalia__pc,
+            AccountSource, PersonLeadSource, Rating, PL_Estado__pc,
+            PL_Campos_Incompletos__pc, TX_Medio_Origen__c,
+            ConvertedFromLead__c, LeadCreatedDate__c,
+            GoogleAnalyticsCampaign__pc, GoogleAnalyticsContent__pc,
+            GoogleAnalyticsMedium__pc, GoogleAnalyticsSource__pc,
+            GoogleAnalyticsTerm__pc, TX_Codigo__pc,
+            FO_Pais__pc, FO_Provincia__pc, TX_OtraLocalidad__pc,
+            CH_Nacional__pc, CH_Internacional__pc, CH_Grado__pc, CH_Master__pc,
+            CH_OtrosTitulos__c, CH_Estudiando_diploma_IB__pc,
+            NU_Nota_media_definitiva__pc, PL_Curso_actual__pc, PL_Curso_Interes__c,
+            NU_Nota_media_1_bach__pc, BO_Asignacion_nota_media_1_Bach_manual__pc,
+            NU_Nota_media_2_bach__pc, BO_Asignacion_nota_media_2_Bach_manual__pc,
+            NU_Nota_media_1_bach_SI__pc, NU_Media_Expediente_Universitario__c,
+            LK_CentroEnsenanza__pc, LK_CentroEnsenanza__pr.name,
+            TX_Pais_CentroEnsenanza__pc, TX_Provincia_CentroEnsenanza__pc,
+            TX_Localidad_CentroEnsenanza__pc, TX_OtroCentroEnsenanza__pc,
+            NU_Nota_media_2_bach_SI__pc, CH_Estudiante__pc, CH_Solicitante__pc,
+            CH_Alumno__pc, CH_AntiguoAlumno__pc, CH_Empleado__pc,
+            PL_Lugar_Trabajo_UNAV__pc, CH_Profesor_asociado__pc,
+            CH_Hijo_profesor_asociado__pc, CH_Alumni__pc,
+            CH_AntiguoAlumno_intercambio__pc, CH_Hijo_empleado__pc,
+            CH_Hijo_antiguo_alumno__pc, CH_Hijo_miembro_alumni__pc,
+            CH_Hermanos_estudiando_UNAV__pc, CH_Hijo_medico__pc,
+            PL_Profesion__pc, TX_Ocupacion__pc, PL_Situacion_socio_economica__pc,
+            CH_NoRecibirCorreoPostal__pc, PersonHasOptedOutOfEmail,
+            ACC_CHK_Alumno_fidelizado__c, Sudadera__c,
+            TX_Observaciones_Backoffice__pc, PL_Cambios_Observ_Automaticas__pc,
+            CH_Admision_curso_superior_primero__pc, FOR_Universidad_Afin__pc,
+            FOR_Colegio_Afin__pc, CH_Alumno_Colegio_Colaborador__pc,
+            CH_Atencion_especial_Admision__pc, CH_Atencion_especial_Rectorado__pc,
+            CH_Origen_geografico_estrategico__pc, PL_Aficiones__pc,
+            TX_Deporte_practicado__pc, TX_Deporte_federados__pc,
+            PL_Conocimiento_UNAV__pc, TX_Otros__pc, PL_Tipo_Centro_Profesor__pc,
+            TX_NombreApellidos_Profesor__pc, TX_Delegado_UNAV__pc,
+            URL_Web_UNAV__pc, TX_Antiguo_alumno_Grado__pc,
+            TX_Antiguo_alumno_Master__pc, TX_Buscador__pc,
+            PL_MotivoInfluencia1__pc, PL_MotivoInfluencia2__pc,
+            PL_MotivoInfluencia3__pc, TX_Motivo_Influencia__pc,
+            ACC_CHK_SeguimientoDelegado__c, ACC_CHK_NoContestaTelefono__c,
+            ACC_CHK_NoSeguimientoPersonalizado__c, ACC_TXA_ObservacionesCallCenter__c,
+            ACC_DTT_FechaUltimaActividad__c, ACC_CHK_SeguimientoCentro__c,
+            ACC_LK_CentroElegidoDelegado__c, ACC_LK_ResponsableSeguimientoCaso__c,
+            ACC_CHK_NoSeguimientoCentro__c, ACC_TXA_ObservacionesDelegado__c,
+            ACC_DTT_FechaUltimaActividadDelegado__c, ACC_CHK_CasoAsignadoCentro__c,
+            ACC_TXA_ObservacionesCentro__c, ACC_DTT_FechaUltimaActividadCentro__c,
+            ACC_PL_ValoracionSI__c, PL_valoracionDelegado__c,
+            PL_Clasificacion_Inicial__pc, DT_Fech_Clasificacion_Inicial__pc,
+            ACC_PL_ProbabilidadMatricula__c, ACC_LK_TitulacionSubjetivaMatricula__c,
+            ACC_TXA_ObservacionesProbMatricula__c, ACC_TX_AutorValoracion__c,
+            ACC_DTT_FechaValoracion__c, ACC_TXA_ObservacionesAdmision__c,
+            ACC_DTT_FechaUltimaActividadAdmision__c, TX_Observaciones_OFE__c,
+            DT_Fecha_Observaciones_OFE__c, FechaUltimaActividadOrientacion__c,
+            ObservacionesOrientacion__c, ACC_CHK_NoContinua__c, ACC_PL_Motivos__c,
+            ACC_TX_GradoMatricula__c, ACC_LK_Universidad__c, ACC_TX_OtraUniversidad__c,
+            ACC_TXA_ObservacionesNoContinua__c, ACC_DTT_FechaNoContinua__c,
+            CH_Alojamiento__pc, CH_Visitacampus__pc, CH_BecasAyudas__pc,
+            CH_Entrevista_personal__pc, DonanteBAN__c, CH_No_Promocionable__c,
+            RES_Numero_SI_Grado_Abiertas__c, RES_Numero_SI_Master_Abiertas__c,
+            RES_Numero_SA_Grado_Abiertas__c, RES_Numero_SA_Master_Abiertas__c,
+            RES_Numero_SM_Grado_Abiertas__c, RES_Numero_SM_Master_Abiertas__c,
+            COUNT_SBAN__c, LeadRealInterest__pc, OwnerId
+        FROM Account
+        WHERE id IN ({_OPP_SUBQUERY.replace('SELECT id', 'SELECT accountid')})
+    """),
+
+    # 3 · ECBs (EstudioCosteBecas__c)
+    ("ecbs", f"""
+        SELECT Id, LK_oportunidad__c, TX_idEstudio__c, RecordTypeId, RecordType.name,
+            LK_titulacionDefinitiva__c, LK_titulacionDefinitiva__r.name,
+            LK_titulacionSolicitada__c, LK_titulacionSolicitada__r.name,
+            LK_cuenta__c, ECB_LK_SolicitudBAN__c, LK_cursoAcademico__c,
+            LK_cursoAcademico__r.name, PL_Estado_oportunidad__c, PL_estado__c,
+            FO_regFis_for__c, FO_regFis_ges__c, FO_rentaMEC_for__c,
+            FO_rentaFam_ges__c, CU_precioOrdinario_def__c,
+            CU_precioIncentivado_def__c, CU_precioFamNum_def__c,
+            PO_descFamNum_def__c, CU_precioAplicado_def__c,
+            DT_Fecha_solicitud__c, PL_resolucion__c, PL_opcionEscogida__c,
+            Plazo_Beca_Alumni__c, PL_estadoBecaAlumni__c, CreatedDate
+        FROM EstudioCosteBecas__c
+        WHERE LK_oportunidad__c IN ({_OPP_SUBQUERY})
+    """),
+
+    # 4 · SOLBAN (BASF_Solicitud__c)
+    ("solban", f"""
+        SELECT Id, Name, SOL_LK_oportunidad__c, SOL_NUM_curso__c,
+            SOL_SEL_estado__c, SOL_LK_titulacionAdmision__c,
+            SOL_LK_titulacionAdmision__r.name, SOL_LK_periodoSolicitud__c,
+            SOL_LK_periodoSolicitud__r.name, SOL_LK_Solicitante__c,
+            RecordTypeId, RecordType.name, SOL_MON_importeConcedido__c,
+            CreatedDate
+        FROM BASF_Solicitud__c
+        WHERE SOL_LK_oportunidad__r.PL_Curso_academico__c = '{CURSO}'
+    """),
+
+    # 5 · Cases
+    ("cases", f"""
+        SELECT AccountId, ContactId, LK_Candidato__c, LK_Oportunidad__c,
+            RecordTypeId, RecordType.name, PL_Curso_academico__c,
+            Description, Status, PL_Tipo__c, Reason,
+            DT_fechaEntrevista__c, DT_fechaEntrevistaAcordada__c,
+            PL_temasTratar__c, Subtype__c, CreatedDate,
+            LK_Beca__c, Beca_por_curso_academico__c, Modalidad__c,
+            PL_Etapa__c, PL_Resolucion__c, CU_ImporteBecado__c,
+            NU_Importe_Beca_Concedido__c, NU_Importe_matricula_aproximado__c,
+            PO_PorcentajeReduccion__c, PL_Resolucion_beca__c, CH_Pago_integro__c,
+            LK_ColegioMayor__c, LK_ColegioMayor__r.name, Origin, Priority,
+            OwnerId, PL_Grado_Master__c, URL_AccesoTest__c, CH_URLVisible__c,
+            CH_resultadoVisible__c, LK_TitulacionSolicitada__c,
+            LK_TitulacionSolicitada__r.name, LK_Titulacion_de_admision__c,
+            LK_Titulacion_de_admision__r.name, DT_Fecha_Hora_definitiva__c,
+            CH_Archivo_visible__c, DT_fechaOpcion1__c, DT_fechaOpcion2__c,
+            NU_asistentes__c, CH_Proceso_de_admision__c, CH_Orientacion__c,
+            PL_completarVisita__c, CH_Financiacion__c,
+            CursandoBachilleratoInternacional__c, TX_Titulacion_de_interes__c,
+            LK_Estudio_de_coste_y_becas__c, PL_Entrevista__c,
+            TX_Composicion_familiar__c, NU_Renta_actual__c, TX_Observaciones__c,
+            CH_Carta_enviada__c, DT_Fecha_carta_enviada__c, CH_Abonado_alumno__c,
+            TX_InformacionBeca__c, TX_MotivoDenegacion__c,
+            TX_Motivo_cancelacion_beca__c, BASF_Solicitud__c
+        FROM Case
+        WHERE PL_Curso_academico__c = '{CURSO}'
+        AND LK_Oportunidad__r.RecordType.name IN {RECORD_TYPES}
+    """),
+
+    # 6 · IndividualEmailResult
+    ("email_results", f"""
+        SELECT CreatedById, CreatedDate, et4ae5__Contact__c, et4ae5__Lead_ID__c,
+            et4ae5__Clicked__c, et4ae5__DateBounced__c, et4ae5__DateOpened__c,
+            et4ae5__DateSent__c, et4ae5__DateUnsubscribed__c,
+            et4ae5__FromAddress__c, et4ae5__FromName__c, et4ae5__HardBounce__c,
+            et4ae5__NumberOfTotalClicks__c, et4ae5__NumberOfUniqueClicks__c,
+            et4ae5__Opened__c, et4ae5__SendDefinition__c, et4ae5__SoftBounce__c,
+            et4ae5__SubjectLine__c, et4ae5__Tracking_As_Of__c,
+            et4ae5__TriggeredSendDefinitionName__c, Id, IsDeleted,
+            LastModifiedById, LastModifiedDate, OpportunityId__c, SystemModstamp
+        FROM et4ae5__IndividualEmailResult__c
+        WHERE OpportunityId__r.PL_Curso_academico__c = '{CURSO}'
+        AND OpportunityId__r.RecordType.name IN {RECORD_TYPES}
+    """),
+
+    # 7 · ActivityHistory (CampaignMember)
+    ("activity_history", f"""
+        SELECT CampaignId, ContactId, LeadId, CreatedDate, Status,
+            Estado_del_miembro__c, NU_Acompanantes__c, TX_Acompanantes__c,
+            FO_Asiste__c, HasResponded, Centro__c,
+            Campaign.LK_tipoActividadPromocion__c,
+            Campaign.LK_tipoActividadPromocion__r.name,
+            Campaign.Name, Campaign.IsActive, Campaign.PL_tipoAlumno__c,
+            Campaign.Status, Campaign.PL_subEtapa__c, Campaign.NUM_Capacidad__c,
+            Campaign.AcademicCourse__c, Campaign.EventSurveyType__c,
+            Campaign.LK_ColegioRelacionado__c,
+            Campaign.LK_ColegioRelacionado__r.name,
+            Campaign.PublicoObjetivo__c, Campaign.CH_Online__c,
+            Campaign.PL_tipoSolicitud__c, Campaign.TX_lugarEvento__c,
+            Campaign.LK_ambitoGeografico__c,
+            Campaign.LK_ambitoGeografico__r.name,
+            Campaign.FacultadEscuela__c, Campaign.DT_fechaInicio__c,
+            Campaign.DT_fechaFin__c, Campaign.Actividad_con_petis__c,
+            Campaign.N_mero_de_asistentes_real_o_estimaci_n__c,
+            Campaign.N_mero_de_solicitudes_recogidas__c,
+            Campaign.Fecha_de_recepci_n_en_Admisi_n__c,
+            Campaign.Fecha_fin_de_registro_en_SF__c,
+            Campaign.Periodo_de_recepci_n_d_as__c,
+            Campaign.Periodo_de_registro_d_as__c,
+            Campaign.SUM_AlumnoInscritos__c,
+            Campaign.SUM_AcompanantesInscritos__c,
+            Campaign.FOR_NUM_Inscritos__c, Campaign.SUM_AlumnosAsistentes__c,
+            Campaign.SUM_AcompanantesAsistentes__c, Campaign.FOR_NUM_Asistentes__c,
+            Campaign.NumberOfResponses, Campaign.NumberOfLeads,
+            Campaign.NumberOfConvertedLeads, Campaign.NumberOfContacts,
+            Campaign.NumberOfOpportunities, Campaign.NumberOfWonOpportunities
+        FROM CampaignMember
+        WHERE ContactId IN (
+            SELECT ContactId FROM Opportunity
+            WHERE PL_Curso_academico__c = '{CURSO}'
+            AND RecordType.name IN {RECORD_TYPES}
+        )
+    """),
+
+    # 8 · OpportunityFieldHistory
+    ("opp_field_history", f"""
+        SELECT OpportunityId, DataType, NewValue, OldValue, Id, Field
+        FROM OpportunityFieldHistory
+        WHERE OpportunityId IN ({_OPP_SUBQUERY})
+        AND Field IN (
+            'PL_Curso_academico__c', 'PL_Tipo_Acceso__c', 'RecordTypeId',
+            'PL_Estado__c', 'StageName', 'PL_Subetapa__c', 'CH_Completa__c',
+            'Cambia_de_carrera__c', 'PL_Gestionado_por__c', 'CH_Nacional__c',
+            'CH_Internacional__c', 'PL_Origen_de_solicitud__c', 'PL_Formato__c',
+            'CH_Origen_admision__c', 'CloseDate', 'LeadSource',
+            'PL_Origen_formulario__c', 'PL_Plazo_admision__c',
+            'LK_Calendario_de_admision__c', 'LK_Calendario_de_admision_final__c',
+            'NU_Nota_media_admision__c', 'TX_Descripcion_No_presentado__c',
+            'NU_Posicion_ranking__c', 'NU_Resultado_admision_puntos__c',
+            'CH_StandBy__c', 'DT_Fecha_propuesta_resolucion_facultad__c',
+            'CH_EstudioConvalidaciones_realizado__c', 'LK_Titulacion__c',
+            'LK_Titulacion_definitiva__c', 'LK_Titulacion_GA__c',
+            'LK_Titulacion_por_curso_academico__c',
+            'LK_Titulacion_por_curso_academico_final__c', 'Llamada_Call__c',
+            'PL_Resolucion_definitiva__c', 'PL_Resolucion_inicial__c',
+            'PL_Resolucion_propuesta__c', 'ObservacionesAdmision__c',
+            'ObservacionesDeCondicionado__c', 'ObservacionesDeCondicionadoEng__c',
+            'ObservacionesDeDenegado__c', 'ObservacionesDeDenegadoEng__c',
+            'Observacionesmaster__c', 'Observacionesresolucion__c',
+            'PL_Curso_actual__c', 'LK_CentroEnsenanza__c',
+            'TX_Localidad_CentroEnsenanza__c', 'PL_Modalidad_de_acceso__c',
+            'CU_Importe_total__c', 'ImportePrimerPago__c',
+            'FechaLimitePrimerPago__c', 'MinimumPaymentPayed__c',
+            'MinimumPaymentDate__c', 'Paid_Amount__c',
+            'NU_Importe_descuento_pronto_pago__c', 'DT_Fecha_creacion_SA__c',
+            'DT_Fecha_envio_SA__c', 'DT_Fecha_Publicacion_resolucion__c',
+            'DT_Fech_fin_plazo__c', 'TX_Beca_solicitada__c',
+            'CH_Matricula_sujeta_beca__c', 'Motivomaster__c',
+            'TX_Motivo_solicitud__c', 'PL_Valoracion_estudio_postgrado__c',
+            'Fech_Definitiva_Valoraci_n__c', 'TX_Motivo_valoracion__c'
+        )
+    """),
+
+    # 9 · Pagos
+    ("pagos", f"""
+        SELECT LK_Oportunidad__c, PL_Metodo_pago__c, PL_Tipo__c,
+            PL_Origen_pago__c, CU_Importe__c, CH_Pagado__c, LK_Pago__c
+        FROM Pago__c
+        WHERE LK_oportunidad__c IN ({_OPP_SUBQUERY})
+    """),
+
+    # 10 · StageHistory
+    ("stage_history", f"""
+        SELECT LK_Oportunidad__c, PL_Etapa__c, PL_Subetapa__c,
+            CreatedDate, CH_Completa_principal__c, Fecha_fin_etapa__c
+        FROM Historial_de_etapa__c
+        WHERE LK_Oportunidad__c IN ({_OPP_SUBQUERY})
+    """),
+]
+
+
+# ---------------------------------------------------------------------------
+# Ejecución
+# ---------------------------------------------------------------------------
+def run(output_dir: str) -> None:
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    sf = SalesforceExtractor()
+    sf.authenticate()
+
+    results: dict[str, int] = {}
+
+    for name, soql in QUERIES:
+        logger.info("=" * 60)
+        logger.info("Extrayendo: %s", name)
+        try:
+            _, df = sf.query_to_dataframe(soql)
+            csv_path = out / f"{name}.csv"
+            df.to_csv(csv_path, sep=";", index=False, encoding="utf-8-sig")
+            results[name] = len(df)
+            logger.info("Guardado: %s (%d filas)", csv_path, len(df))
+        except Exception as e:
+            logger.error("Error en '%s': %s", name, e)
+            results[name] = -1
+
+    # Resumen final
+    logger.info("=" * 60)
+    logger.info("RESUMEN")
+    logger.info("=" * 60)
+    for name, count in results.items():
+        status = f"{count:,} filas" if count >= 0 else "ERROR"
+        logger.info("  %-25s %s", name, status)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Extrae datos de Salesforce a CSV")
+    parser.add_argument(
+        "--output",
+        default=str(Path.home() / "Downloads" / "sf_data"),
+        help="Directorio de salida para los CSV (default: ~/Downloads/sf_data)",
+    )
+    args = parser.parse_args()
+    run(args.output)
