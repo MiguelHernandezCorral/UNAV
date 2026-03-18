@@ -1,29 +1,35 @@
 """
 sf_extract_all.py
 =================
-Extrae todas las entidades necesarias desde Salesforce y las guarda en CSV.
+FASE 1 – Ingesta Salesforce → Oracle
+======================================
+Extrae todas las entidades necesarias desde Salesforce y las carga
+directamente en Oracle via MERGE INTO (upsert).
+No se generan CSVs intermedios: los registros JSON de Salesforce se
+aplanan y se envían directamente a Oracle.
 
-Entidades extraídas:
-  1. Opportunity               → opportunity.csv
-  2. Account                   → account.csv
-  3. EstudioCosteBecas__c      → ecbs.csv
-  4. BASF_Solicitud__c         → solban.csv
-  5. Case                      → cases.csv
-  6. IndividualEmailResult__c  → email_results.csv
-  7. CampaignMember            → activity_history.csv
-  8. OpportunityFieldHistory   → opp_field_history.csv
-  9. Pago__c                   → pagos.csv
+Entidades cargadas:
+  1. Opportunity               → OPPORTUNITY
+  2. Account                   → ACCOUNT
+  3. EstudioCosteBecas__c      → ECBS
+  4. BASF_Solicitud__c         → SOLBAN
+  5. Case                      → CASES
+  6. IndividualEmailResult__c  → EMAIL_RESULTS
+  7. CampaignMember            → ACTIVITY_HISTORY
+  8. OpportunityFieldHistory   → OPP_FIELD_HISTORY
+  9. Pago__c                   → PAGOS
+  10. Historial_de_etapa__c    → STAGE_HISTORY
+
+Estado de fases:
+  [DONE] Fase 1 – Ingesta SF → Oracle
 
 Uso:
     python src/sf_extract_all.py
-    python src/sf_extract_all.py --output /ruta/salida
 """
 
-import os
 import sys
-import argparse
 import logging
-import pandas as pd
+import logging.handlers
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -31,22 +37,44 @@ load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).parent))
 from sf_extractor import SalesforceExtractor
+from oracle_connector import OracleConnector
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+# ---------------------------------------------------------------------------
+# Logging con rotación diaria (7 días de retención)
+# ---------------------------------------------------------------------------
+LOG_DIR = Path(__file__).parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+
+_fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s – %(message)s")
+
+_console = logging.StreamHandler()
+_console.setFormatter(_fmt)
+_root.addHandler(_console)
+
+_file_handler = logging.handlers.TimedRotatingFileHandler(
+    filename=LOG_DIR / "sf_extract_all.log",
+    when="midnight",
+    backupCount=7,
+    encoding="utf-8",
 )
+_file_handler.setFormatter(_fmt)
+_root.addHandler(_file_handler)
+
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Filtro base reutilizable (curso + tipos de record)
 # ---------------------------------------------------------------------------
 CURSO = "2026/2027"
 RECORD_TYPES = (
-    "('Solicitud Admisi\u00f3n Grado', "
-    "'Solicitud Admisi\u00f3n M\u00e1ster', "
+    "('Solicitud Admisión Grado', "
+    "'Solicitud Admisión Máster', "
     "'Solicitud Matricula Grado', "
-    "'Solicitud Matricula M\u00e1ster')"
+    "'Solicitud Matricula Máster')"
 )
 
 # Subquery de Opportunity reutilizada en varios FROM
@@ -56,13 +84,14 @@ _OPP_SUBQUERY = (
     f"AND RecordType.name IN {RECORD_TYPES}"
 )
 
+
 # ---------------------------------------------------------------------------
-# Definición de todas las queries
+# Definición de entidades: (sf_name, oracle_table, pk_col, soql)
 # ---------------------------------------------------------------------------
-QUERIES: list[tuple[str, str]] = [
+ENTITIES: list[tuple[str, str, str, str]] = [
 
     # 1 · Opportunity
-    ("opportunity", f"""
+    ("opportunity", "OPPORTUNITY", "Id", f"""
         SELECT Id, AccountId, TX_Num_Credencial__c, PL_Curso_academico__c,
             PL_Mes_Anio_inicio__c, PL_Tipo_Acceso__c, RecordTypeId, RecordType.name,
             PL_Estado__c, StageName, PL_Subetapa__c, Estado_Matricula__c,
@@ -118,8 +147,8 @@ QUERIES: list[tuple[str, str]] = [
     """),
 
     # 2 · Account
-    ("account", f"""
-        SELECT ID18__c, ID18__pc, PersonBirthdate, PL_Sexo__pc,
+    ("account", "ACCOUNT", "Id", f"""
+        SELECT Id, ID18__c, ID18__pc, PersonBirthdate, PL_Sexo__pc,
             LK_Nacionalidad__pc, LK_Nacionalidad__pr.name,
             FOR_Pais_de_nacimiento__pc, FOR_Provincia_de_nacimiento__pc,
             TX_Localidad_Nacimiento__pc, PersonMobilePhone,
@@ -192,7 +221,7 @@ QUERIES: list[tuple[str, str]] = [
     """),
 
     # 3 · ECBs (EstudioCosteBecas__c)
-    ("ecbs", f"""
+    ("ecbs", "ECBS", "Id", f"""
         SELECT Id, LK_oportunidad__c, TX_idEstudio__c, RecordTypeId, RecordType.name,
             LK_titulacionDefinitiva__c, LK_titulacionDefinitiva__r.name,
             LK_titulacionSolicitada__c, LK_titulacionSolicitada__r.name,
@@ -209,7 +238,7 @@ QUERIES: list[tuple[str, str]] = [
     """),
 
     # 4 · SOLBAN (BASF_Solicitud__c)
-    ("solban", f"""
+    ("solban", "SOLBAN", "Id", f"""
         SELECT Id, Name, SOL_LK_oportunidad__c, SOL_NUM_curso__c,
             SOL_SEL_estado__c, SOL_LK_titulacionAdmision__c,
             SOL_LK_titulacionAdmision__r.name, SOL_LK_periodoSolicitud__c,
@@ -221,8 +250,8 @@ QUERIES: list[tuple[str, str]] = [
     """),
 
     # 5 · Cases
-    ("cases", f"""
-        SELECT AccountId, ContactId, LK_Candidato__c, LK_Oportunidad__c,
+    ("cases", "CASES", "Id", f"""
+        SELECT Id, AccountId, ContactId, LK_Candidato__c, LK_Oportunidad__c,
             RecordTypeId, RecordType.name, PL_Curso_academico__c,
             Description, Status, PL_Tipo__c, Reason,
             DT_fechaEntrevista__c, DT_fechaEntrevistaAcordada__c,
@@ -251,7 +280,7 @@ QUERIES: list[tuple[str, str]] = [
     """),
 
     # 6 · IndividualEmailResult
-    ("email_results", f"""
+    ("email_results", "EMAIL_RESULTS", "Id", f"""
         SELECT CreatedById, CreatedDate, et4ae5__Contact__c, et4ae5__Lead_ID__c,
             et4ae5__Clicked__c, et4ae5__DateBounced__c, et4ae5__DateOpened__c,
             et4ae5__DateSent__c, et4ae5__DateUnsubscribed__c,
@@ -267,8 +296,8 @@ QUERIES: list[tuple[str, str]] = [
     """),
 
     # 7 · ActivityHistory (CampaignMember)
-    ("activity_history", f"""
-        SELECT CampaignId, ContactId, LeadId, CreatedDate, Status,
+    ("activity_history", "ACTIVITY_HISTORY", "Id", f"""
+        SELECT Id, CampaignId, ContactId, LeadId, CreatedDate, Status,
             Estado_del_miembro__c, NU_Acompanantes__c, TX_Acompanantes__c,
             FO_Asiste__c, HasResponded, Centro__c,
             Campaign.LK_tipoActividadPromocion__c,
@@ -306,7 +335,7 @@ QUERIES: list[tuple[str, str]] = [
     """),
 
     # 8 · OpportunityFieldHistory
-    ("opp_field_history", f"""
+    ("opp_field_history", "OPP_FIELD_HISTORY", "Id", f"""
         SELECT OpportunityId, DataType, NewValue, OldValue, Id, Field
         FROM OpportunityFieldHistory
         WHERE OpportunityId IN ({_OPP_SUBQUERY})
@@ -345,16 +374,16 @@ QUERIES: list[tuple[str, str]] = [
     """),
 
     # 9 · Pagos
-    ("pagos", f"""
-        SELECT LK_Oportunidad__c, PL_Metodo_pago__c, PL_Tipo__c,
+    ("pagos", "PAGOS", "Id", f"""
+        SELECT Id, LK_Oportunidad__c, PL_Metodo_pago__c, PL_Tipo__c,
             PL_Origen_pago__c, CU_Importe__c, CH_Pagado__c, LK_Pago__c
         FROM Pago__c
         WHERE LK_oportunidad__c IN ({_OPP_SUBQUERY})
     """),
 
     # 10 · StageHistory
-    ("stage_history", f"""
-        SELECT LK_Oportunidad__c, PL_Etapa__c, PL_Subetapa__c,
+    ("stage_history", "STAGE_HISTORY", "Id", f"""
+        SELECT Id, LK_Oportunidad__c, PL_Etapa__c, PL_Subetapa__c,
             CreatedDate, CH_Completa_principal__c, Fecha_fin_etapa__c
         FROM Historial_de_etapa__c
         WHERE LK_Oportunidad__c IN ({_OPP_SUBQUERY})
@@ -363,45 +392,74 @@ QUERIES: list[tuple[str, str]] = [
 
 
 # ---------------------------------------------------------------------------
-# Ejecución
+# Ejecución principal: SF → Oracle directo
 # ---------------------------------------------------------------------------
-def run(output_dir: str) -> None:
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
+
+def run() -> dict[str, int]:
+    """
+    Ejecuta la ingesta completa: extrae cada entidad de Salesforce y la
+    carga directamente en Oracle via upsert (MERGE INTO).
+
+    Returns:
+        Diccionario {entidad: filas_procesadas} (−1 en caso de error).
+    """
+    logger.info("=" * 70)
+    logger.info("FASE 1 – INGESTA SALESFORCE → ORACLE  [INICIO]")
+    logger.info("Curso académico: %s", CURSO)
+    logger.info("=" * 70)
 
     sf = SalesforceExtractor()
     sf.authenticate()
 
     results: dict[str, int] = {}
 
-    for name, soql in QUERIES:
-        logger.info("=" * 60)
-        logger.info("Extrayendo: %s", name)
-        try:
-            _, df = sf.query_to_dataframe(soql)
-            csv_path = out / f"{name}.csv"
-            df.to_csv(csv_path, sep=";", index=False, encoding="utf-8-sig")
-            results[name] = len(df)
-            logger.info("Guardado: %s (%d filas)", csv_path, len(df))
-        except Exception as e:
-            logger.error("Error en '%s': %s", name, e)
-            results[name] = -1
+    with OracleConnector() as ora:
+        for sf_name, ora_table, pk_col, soql in ENTITIES:
+            logger.info("-" * 60)
+            logger.info("Procesando entidad: %s → %s", sf_name, ora_table)
+            try:
+                # 1. Extraer de Salesforce (JSON nativo, list[dict])
+                records_raw = sf.query(soql)
+                if not records_raw:
+                    logger.warning("Sin registros para %s.", sf_name)
+                    results[sf_name] = 0
+                    continue
 
+                # 2. Aplanar relaciones anidadas (LK__r.name, Campaign.X, etc.)
+                flat_records = [
+                    SalesforceExtractor._flatten_record(r)
+                    for r in records_raw
+                ]
+
+                # 3. Upsert en Oracle
+                n = ora.upsert_records(flat_records, ora_table, pk_col)
+                results[sf_name] = n
+                logger.info("OK  %-20s → %-25s %d filas", sf_name, ora_table, n)
+
+            except Exception as exc:
+                logger.error("ERROR en '%s': %s", sf_name, exc, exc_info=True)
+                results[sf_name] = -1
+
+    # ------------------------------------------------------------------
     # Resumen final
-    logger.info("=" * 60)
-    logger.info("RESUMEN")
-    logger.info("=" * 60)
-    for name, count in results.items():
-        status = f"{count:,} filas" if count >= 0 else "ERROR"
-        logger.info("  %-25s %s", name, status)
+    # ------------------------------------------------------------------
+    logger.info("=" * 70)
+    logger.info("FASE 1 – INGESTA SALESFORCE → ORACLE  [FIN]")
+    logger.info("=" * 70)
+    ok  = [(n, c) for n, c in results.items() if c >= 0]
+    err = [(n, c) for n, c in results.items() if c < 0]
+    for name, count in ok:
+        logger.info("  [OK]    %-25s %d filas", name, count)
+    for name, _ in err:
+        logger.error("  [ERROR] %s", name)
+
+    if err:
+        logger.warning("Fase 1 completada con %d errores.", len(err))
+    else:
+        logger.info("Fase 1 completada sin errores.")
+
+    return results
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Extrae datos de Salesforce a CSV")
-    parser.add_argument(
-        "--output",
-        default=str(Path.home() / "Downloads" / "sf_data"),
-        help="Directorio de salida para los CSV (default: ~/Downloads/sf_data)",
-    )
-    args = parser.parse_args()
-    run(args.output)
+    run()
