@@ -186,15 +186,19 @@ def run_predictions(
     for tipo in TIPOS:
         logger.info(f"--- Procesando segmento: {tipo} ---")
 
-        # Preprocesado
-        df_model, safe_cols, df_ids = preprocess(df_raw, tipo)
+        # Cargar modelo primero para obtener las features exactas que necesita
+        model = cargar_modelo(tipo)
+        # feature_names_in_ incluye 'target' del setup original — lo excluimos
+        model_features = [f for f in model.feature_names_in_ if f != "target"]
+
+        # Preprocesado usando las features exactas del modelo (modo inferencia)
+        df_model, _, df_ids = preprocess(df_raw, tipo, model_features=model_features)
 
         if df_model.empty:
             logger.warning(f"No hay filas para el segmento '{tipo}' — se omite.")
             continue
 
-        # Carga de modelo y predicción
-        model = cargar_modelo(tipo)
+        # Predicción
         preds = predecir(model, df_model)
 
         # Construcción tabla resultado

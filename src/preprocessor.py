@@ -28,15 +28,48 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
+# ─── Mapeo Oracle (mayúsculas) → nombres que esperan los modelos ──────────────
+# Las columnas de DATASET_LIMPIO en Oracle están en MAYÚSCULAS o con sufijos
+# distintos a los del CSV original con el que se entrenaron los modelos.
+
+ORACLE_COLUMN_MAP = {
+    # Columnas que Oracle guarda en mayúsculas pero el modelo espera en minúsculas
+    "CREATEDDATE":             "CreatedDate",
+    "PL_ETAPA__C":             "PL_Etapa__c",
+    "PL_SUBETAPA__C":          "PL_Subetapa__c",
+    "FO_RENTAFAM_GES__C":      "FO_rentaFam_ges__c",
+    "CU_PRECIOORDINARIO_DEF__C": "CU_precioOrdinario_def__c",
+    "CU_PRECIOAPLICADO_DEF__C":  "CU_precioAplicado_def__c",
+    "TIEMPO_ETAPA_DIAS":       "tiempo_etapa_dias",
+    "TIEMPO_ENTRE_ETAPAS_DIAS": "tiempo_entre_etapas_dias",
+    "NUM_ASISTENCIAS_ACUM":    "num_asistencias_acum",
+    "NUM_SOLICITUDES_ACUM":    "num_solicitudes_acum",
+    # Columna renombrada entre CSV y Oracle
+    "PORCENTAJE_PAGADO_FINAL": "PAID_PERCENT",
+    # target en Oracle en mayúsculas
+    "TARGET":                  "target",
+    "DESMATRICULADO":          "desmatriculado",
+}
+
+# Columnas que no existen en Oracle pero los modelos necesitan → se añaden con 0
+COLS_ADD_ZERO = [
+    "CU_IMPORTE_TOTAL",
+    "NU_MEDIA_EXPEDIENTE_UNIVERSITA",
+]
+
 # ─── Constantes de negocio ────────────────────────────────────────────────────
 
 COLS_ID = ["ACCOUNTID", "ID", "ID18__PC", "BIRTHDATE", "CreatedDate"]
 
 VARS_EXCLUIR = [
+    # Nombres originales del notebook
     "desmatriculado", "MINIMUMPAYMENTPAYED", "CH_PAGO_SUPERIOR",
     "PL_Etapa__c", "PL_Subetapa__c", "ACC_DTT_FECHAULTIMAACTIVIDAD",
     "NAMEX", "YEARPERSONBIRTHDATE", "PAID_AMOUNT",
     "PC1", "PC2", "CreatedDate", "cluster", "interpretacion_cluster",
+    # Nombres adicionales que Oracle puede tener y no se deben usar como features
+    "MINIMUMPAYMENTPAYED", "CH_PAGO_SUPERIOR", "FUENTE_DATOS",
+    "PAID_AMOUNT", "YEARPERSONBIRTHDATE",
 ]
 
 VARS_CERO_LOGICO = [
@@ -61,6 +94,25 @@ TARGET = "target"
 
 # ─── Funciones públicas ───────────────────────────────────────────────────────
 
+def normalizar_columnas_oracle(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adapta las columnas del DATASET_LIMPIO de Oracle al esquema que esperan
+    los modelos entrenados (nombres del notebook original).
+
+    Pasos:
+    1. Renombra las columnas según ORACLE_COLUMN_MAP
+    2. Añade con valor 0 las columnas que faltan en Oracle pero que el modelo necesita
+    """
+    df = df.rename(columns=ORACLE_COLUMN_MAP)
+
+    for col in COLS_ADD_ZERO:
+        if col not in df.columns:
+            df[col] = 0.0
+            logger.debug(f"Columna '{col}' no encontrada en Oracle — añadida con 0")
+
+    return df
+
+
 def load_dataset_limpio() -> pd.DataFrame:
     """
     Carga la tabla DATASET_LIMPIO desde Oracle y la devuelve como DataFrame.
@@ -75,6 +127,8 @@ def load_dataset_limpio() -> pd.DataFrame:
     records = conn.read_table("DATASET_LIMPIO")
     df = pd.DataFrame(records)
     logger.info(f"DATASET_LIMPIO cargado: {df.shape[0]} filas, {df.shape[1]} columnas")
+    df = normalizar_columnas_oracle(df)
+    logger.info("Columnas normalizadas (Oracle → modelo)")
     return df
 
 
@@ -231,7 +285,7 @@ def get_safe_cols(df: pd.DataFrame, target_col: str = TARGET) -> list[str]:
     """
     excluir = set(VARS_EXCLUIR + COLS_ID + [target_col])
 
-    object_cols = set(df.select_dtypes(include=["object", "str"]).columns)
+    object_cols = set(df.select_dtypes(include=["object"]).columns)
     const_cols = set(df.columns[df.nunique() <= 1])
     pca_cols = {c for c in df.columns if c.upper().startswith("PC")}
 
@@ -244,22 +298,54 @@ def get_safe_cols(df: pd.DataFrame, target_col: str = TARGET) -> list[str]:
     return safe
 
 
+def preparar_features_modelo(df: pd.DataFrame, model_features: list[str]) -> pd.DataFrame:
+    """
+    Prepara exactamente las columnas que el modelo espera para inferencia.
+
+    A diferencia de get_safe_cols (diseñada para entrenamiento), esta función
+    NO filtra constantes ni columnas object — simplemente:
+    1. Selecciona las features que el modelo necesita
+    2. Añade con 0 las que faltan en el DataFrame
+    3. Convierte columnas object a numérico (pd.to_numeric con coerce)
+
+    Args:
+        df:             DataFrame preprocesado (sin ID ni target).
+        model_features: Lista de features que espera el modelo (model.feature_names_in_).
+
+    Returns:
+        DataFrame con exactamente las columnas en model_features, en ese orden.
+    """
+    df = df.copy()
+    for col in model_features:
+        if col not in df.columns:
+            df[col] = 0.0
+            logger.debug(f"Feature '{col}' ausente — añadida con 0")
+        elif df[col].dtype == object:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            logger.debug(f"Feature '{col}' convertida de object a numérico")
+    return df[model_features]
+
+
 def preprocess(
     df: pd.DataFrame,
     tipo: Literal["grado", "master"],
+    model_features: list[str] | None = None,
 ) -> tuple[pd.DataFrame, list[str], pd.DataFrame]:
     """
     Pipeline completo de preprocesado pre-PyCaret.
 
     Orquesta split → etapa ordinal → imputación → vinculación →
-    drop IDs → selección safe_cols.
+    drop IDs → preparación de features para el modelo.
 
     Args:
-        df:   DATASET_LIMPIO completo (tal como sale de Oracle).
-        tipo: 'grado' o 'master'.
+        df:             DATASET_LIMPIO completo (tal como sale de Oracle).
+        tipo:           'grado' o 'master'.
+        model_features: Features exactas del modelo (model.feature_names_in_ sin 'target').
+                        Si se proporciona, se usa preparar_features_modelo() en lugar de
+                        get_safe_cols(), garantizando compatibilidad total con el modelo.
 
     Returns:
-        df_model   — DataFrame con safe_cols listo para predict_model()
+        df_model   — DataFrame listo para predict_model()
         safe_cols  — lista de columnas usadas como features
         df_ids     — DataFrame con ID (y target si existe) para auditoría
     """
@@ -289,10 +375,15 @@ def preprocess(
     if TARGET in df_seg.columns:
         df_seg = df_seg.drop(columns=[TARGET])
 
-    # 8. Selección de safe_cols
-    safe_cols = get_safe_cols(df_seg, target_col=TARGET)
-
-    df_model = df_seg[safe_cols].reset_index(drop=True)
+    # 8. Selección de columnas
+    if model_features is not None:
+        # Modo inferencia: usar exactamente las features del modelo
+        df_model = preparar_features_modelo(df_seg, model_features).reset_index(drop=True)
+        safe_cols = model_features
+    else:
+        # Modo exploración: filtro conservador para análisis
+        safe_cols = get_safe_cols(df_seg, target_col=TARGET)
+        df_model = df_seg[safe_cols].reset_index(drop=True)
 
     logger.info(
         f"Preprocesado '{tipo}' completado: "
