@@ -363,9 +363,12 @@ def preprocess(
     # 4. Vinculación previa
     df_seg = crear_vinculacion_previa(df_seg)
 
-    # 5. Guardar IDs y target para auditoría antes de eliminarlos
-    cols_auditoria = [c for c in ["ID"] + ([TARGET] if TARGET in df_seg.columns else [])
-                      if c in df_seg.columns]
+    # 5. Guardar IDs, target y etapa/subetapa para auditoría antes de eliminarlos
+    COLS_AUDITORIA_EXTRA = ["PL_Etapa__c", "PL_Subetapa__c"]
+    cols_auditoria = [
+        c for c in ["ID"] + ([TARGET] if TARGET in df_seg.columns else []) + COLS_AUDITORIA_EXTRA
+        if c in df_seg.columns
+    ]
     df_ids = df_seg[cols_auditoria].reset_index(drop=True)
 
     # 6. Drop columnas identificativas

@@ -652,7 +652,8 @@ def run(recreate: bool = False) -> list[dict]:
     return results
 
 
-if __name__ == "__main__":
+def main(args=None):
+    """Entry point programático para la pipeline orquestadora."""
     parser = argparse.ArgumentParser(
         description="Fase 1: Ingesta Salesforce → Oracle"
     )
@@ -661,5 +662,9 @@ if __name__ == "__main__":
         action="store_true",
         help="Elimina y recrea todas las tablas Oracle antes de cargar (útil en setup inicial)",
     )
-    args = parser.parse_args()
-    run(recreate=args.recreate)
+    parsed = parser.parse_args(args)
+    run(recreate=parsed.recreate)
+
+
+if __name__ == "__main__":
+    main()

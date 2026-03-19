@@ -1103,7 +1103,8 @@ def run(recreate: bool = False, include_historical: bool = False) -> None:
     logger.info("Documentación generada: %s", doc_path)
 
 
-if __name__ == "__main__":
+def main(args=None):
+    """Entry point programático para la pipeline orquestadora."""
     parser = argparse.ArgumentParser(description="Fase 2: Limpieza y dataset de modelado")
     parser.add_argument(
         "--recreate", action="store_true",
@@ -1116,5 +1117,9 @@ if __name__ == "__main__":
             "(tablas *_HIST cargadas por excel_loader.py). Necesario para entrenar el modelo."
         )
     )
-    args = parser.parse_args()
-    run(recreate=args.recreate, include_historical=args.include_historical)
+    parsed = parser.parse_args(args)
+    run(recreate=parsed.recreate, include_historical=parsed.include_historical)
+
+
+if __name__ == "__main__":
+    main()

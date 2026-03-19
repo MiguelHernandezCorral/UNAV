@@ -397,15 +397,9 @@ def run_predictions_v2(
             logger.warning(f"No hay filas para '{tipo}' — omitiendo.")
             continue
 
-        # Recuperar ETAPA y SUBETAPA desde df_raw antes de que preprocess las elimine
+        # ETAPA y SUBETAPA ya vienen en df_ids_base desde preprocessor.preprocess()
+        # (capturadas en el paso 5 de preprocess, antes de eliminar COLS_ID)
         df_ids_completo = df_ids_base.copy()
-        if "ID" in df_ids_completo.columns and "PL_Etapa__c" in df_raw.columns:
-            etapa_map = df_raw.set_index("ID")[["PL_Etapa__c", "PL_Subetapa__c"]]
-            df_ids_completo = df_ids_completo.join(
-                etapa_map,
-                on="ID",
-                how="left",
-            )
 
         preds = predecir(model, df_model)
 
