@@ -7,9 +7,11 @@ los registros JSON de Salesforce (list[dict] aplanados).
 Operaciones:
   - Conexión proxy  pmat_usr[pmatowner]
   - CREATE TABLE automático inferido desde los valores JSON
-  - Upsert genérico via MERGE INTO
+  - DROP TABLE (para recrear con esquema actualizado)
+  - Upsert genérico via MERGE INTO  →  devuelve métricas detalladas
   - Insert histórico (para tabla PREDICCIONES_PROBABILIDAD_MATRICULA)
   - Lectura de tabla a list[dict]
+  - COUNT de filas
 
 Variables de entorno (.env):
     ORA_HOST, ORA_PORT, ORA_SERVICE, ORA_USER, ORA_SCHEMA, ORA_PASSWORD
@@ -83,9 +85,13 @@ def _bind(col: str) -> str:
 def _coerce_value(value, ora_type: str):
     """
     Convierte un valor Python nativo al tipo correcto para Oracle.
-    - bool → int (0/1)
-    - int/float → nativo
-    - None → None
+    - bool     → int para NUMBER, '1'/'0' para string
+    - int/float → nativo para NUMBER, str() para NVARCHAR/CLOB
+    - str      → float/None para NUMBER (si no numérico → None)
+    - None     → None
+
+    Garantiza que oracledb recibe siempre el Python type esperado
+    según el DB_TYPE declarado en setinputsizes.
     """
     if value is None:
         return None
@@ -98,8 +104,11 @@ def _coerce_value(value, ora_type: str):
             return float(value)
         except (ValueError, TypeError):
             return None
+    # Columna de tipo string (NVARCHAR2, CLOB): garantizar str Python
     if isinstance(value, bool):
-        return int(value)
+        return "1" if value else "0"
+    if not isinstance(value, str):
+        return str(value)
     return value
 
 
@@ -114,7 +123,7 @@ class OracleConnector:
 
     Uso:
         with OracleConnector() as ora:
-            ora.upsert_records(records, "OPPORTUNITY", pk_col="Id")
+            metrics = ora.upsert_records(records, "OPPORTUNITY", pk_col="Id")
     """
 
     def __init__(self):
@@ -197,6 +206,24 @@ class OracleConnector:
         cur.close()
         return exists
 
+    def count_rows(self, table_name: str) -> int:
+        """Cuenta las filas actuales de una tabla Oracle."""
+        cur = self.conn.cursor()
+        cur.execute(f'SELECT COUNT(*) FROM "{table_name.upper()}"')
+        n = cur.fetchone()[0]
+        cur.close()
+        return n
+
+    def drop_table_if_exists(self, table_name: str) -> None:
+        """DROP TABLE si existe. Usado para recrear tabla con esquema actualizado."""
+        table_upper = table_name.upper()
+        if self._table_exists(table_upper):
+            cur = self.conn.cursor()
+            cur.execute(f'DROP TABLE "{table_upper}"')
+            self.conn.commit()
+            cur.close()
+            logger.info("Tabla %s.%s eliminada (recreación).", self.schema, table_upper)
+
     def create_table_if_not_exists(
         self, records: list[dict], table_name: str, pk_col: str | None = None
     ) -> None:
@@ -229,11 +256,12 @@ class OracleConnector:
         records: list[dict],
         table_name: str,
         pk_col: str,
-    ) -> int:
+    ) -> dict:
         """
         Carga registros JSON aplanados en Oracle via MERGE INTO.
         Crea la tabla automáticamente si no existe.
-        Solo actualiza filas donde al menos un campo haya cambiado.
+        Solo actualiza filas donde al menos un campo haya cambiado
+        (columnas CLOB excluidas de la comparación).
 
         Args:
             records:    list[dict] con los registros aplanados de Salesforce
@@ -241,11 +269,16 @@ class OracleConnector:
             pk_col:     nombre del campo clave primaria (sensible a mayúsculas del JSON)
 
         Returns:
-            Número de filas procesadas.
+            dict con métricas:
+              sf_count   – registros recibidos de Salesforce
+              db_before  – filas en Oracle antes del upsert
+              db_after   – filas en Oracle después del upsert
+              inserted   – filas nuevas insertadas (db_after - db_before)
+              updated    – filas actualizadas (aproximado: affected - inserted)
         """
         if not records:
             logger.warning("Sin registros para %s, se omite upsert.", table_name)
-            return 0
+            return {"sf_count": 0, "db_before": 0, "db_after": 0, "inserted": 0, "updated": 0}
 
         self.create_table_if_not_exists(records, table_name, pk_col)
 
@@ -255,20 +288,35 @@ class OracleConnector:
         cols        = list(schema.keys())
         non_pk_cols = [c for c in cols if c != pk_upper]
 
+        # Columnas CLOB: no se pueden comparar con != en Oracle
+        # Se incluyen en UPDATE SET pero se excluyen del change_cond
+        clob_cols       = {c for c in non_pk_cols if "CLOB" in schema[c]}
+        comparable_cols = [c for c in non_pk_cols if c not in clob_cols]
+
         # bind names: sin caracteres especiales
         bnd = {c: _bind(c) for c in cols}
 
-        src_cols    = ", ".join(f':{bnd[c]}' for c in cols)
+        # Las columnas de la subconsulta DUAL necesitan alias para que
+        # src."COL" sea válido en el ON/SET/VALUES del MERGE.
+        src_cols    = ", ".join(f':{bnd[c]} AS "{c}"' for c in cols)
         match_cond  = f'tgt."{pk_upper}" = src."{pk_upper}"'
         update_set  = ", ".join(f'tgt."{c}" = src."{c}"' for c in non_pk_cols)
         insert_cols = ", ".join(f'"{c}"' for c in cols)
         insert_vals = ", ".join(f'src."{c}"' for c in cols)
-        change_cond = " OR ".join(
-            f'(tgt."{c}" != src."{c}" OR '
-            f'(tgt."{c}" IS NULL AND src."{c}" IS NOT NULL) OR '
-            f'(tgt."{c}" IS NOT NULL AND src."{c}" IS NULL))'
-            for c in non_pk_cols
-        ) if non_pk_cols else "1=0"
+
+        # change_cond: solo columnas comparables (no CLOB, no PK)
+        # "1=1" cuando solo hay CLOBs → siempre actualizar filas coincidentes
+        if comparable_cols:
+            change_cond = " OR ".join(
+                f'(tgt."{c}" != src."{c}" OR '
+                f'(tgt."{c}" IS NULL AND src."{c}" IS NOT NULL) OR '
+                f'(tgt."{c}" IS NOT NULL AND src."{c}" IS NULL))'
+                for c in comparable_cols
+            )
+        elif non_pk_cols:
+            change_cond = "1=1"   # solo CLOBs → actualizar siempre
+        else:
+            change_cond = "1=0"   # sin columnas no-PK → nunca actualizar
 
         merge_sql = f"""
             MERGE INTO "{table_upper}" tgt
@@ -291,27 +339,48 @@ class OracleConnector:
         # setinputsizes: evita ambigüedad de tipo cuando el primer valor es None
         bind_sizes = {bnd[c]: _ora_type_to_db_type(ot) for c, ot in schema.items()}
 
+        # ── Métricas ──────────────────────────────────────────────────
+        db_before = self.count_rows(table_upper)
+
         cursor = self.conn.cursor()
         cursor.setinputsizes(**bind_sizes)
         cursor.executemany(merge_sql, rows)
         self.conn.commit()
-        n = len(rows)
-        logger.info("Upsert %s completado: %d filas.", table_upper, n)
         cursor.close()
-        return n
+
+        db_after = self.count_rows(table_upper)
+        inserted = db_after - db_before
+        updated  = len(rows) - inserted   # aproximado: no cuenta filas sin cambios
+
+        metrics = {
+            "sf_count":  len(rows),
+            "db_before": db_before,
+            "db_after":  db_after,
+            "inserted":  inserted,
+            "updated":   updated,
+        }
+        logger.info(
+            "Upsert %s — SF: %d | DB antes: %d | insertadas: %d | actualizadas: ~%d",
+            table_upper, metrics["sf_count"], metrics["db_before"],
+            metrics["inserted"], metrics["updated"],
+        )
+        return metrics
 
     # ------------------------------------------------------------------
     # Insert histórico
     # ------------------------------------------------------------------
 
-    def insert_records(self, records: list[dict], table_name: str) -> int:
+    def insert_records(self, records: list[dict], table_name: str) -> dict:
         """
         Insert simple sin deduplicación.
         Usado para el histórico de PREDICCIONES_PROBABILIDAD_MATRICULA.
+
+        Returns:
+            dict con métricas: sf_count, db_before, db_after, inserted.
         """
         if not records:
             logger.warning("Sin registros para %s, se omite insert.", table_name)
-            return 0
+            return {"sf_count": 0, "db_before": 0, "db_after": 0, "inserted": 0}
 
         self.create_table_if_not_exists(records, table_name)
 
@@ -331,14 +400,26 @@ class OracleConnector:
 
         bind_sizes = {bnd[c]: _ora_type_to_db_type(ot) for c, ot in schema.items()}
 
+        db_before = self.count_rows(table_upper)
+
         cursor = self.conn.cursor()
         cursor.setinputsizes(**bind_sizes)
         cursor.executemany(sql, rows)
         self.conn.commit()
-        n = len(rows)
-        logger.info("Insert %s completado: %d filas.", table_upper, n)
         cursor.close()
-        return n
+
+        db_after = self.count_rows(table_upper)
+        metrics = {
+            "sf_count":  len(rows),
+            "db_before": db_before,
+            "db_after":  db_after,
+            "inserted":  db_after - db_before,
+        }
+        logger.info(
+            "Insert %s — SF: %d | DB antes: %d | insertadas: %d",
+            table_upper, metrics["sf_count"], metrics["db_before"], metrics["inserted"],
+        )
+        return metrics
 
     # ------------------------------------------------------------------
     # Lectura

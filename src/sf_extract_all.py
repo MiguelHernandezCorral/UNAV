@@ -25,11 +25,14 @@ Estado de fases:
 
 Uso:
     python src/sf_extract_all.py
+    python src/sf_extract_all.py --recreate   # elimina y recrea todas las tablas
 """
 
 import sys
 import logging
 import logging.handlers
+import argparse
+from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -40,11 +43,17 @@ from sf_extractor import SalesforceExtractor
 from oracle_connector import OracleConnector
 
 # ---------------------------------------------------------------------------
+# Directorios de salida
+# ---------------------------------------------------------------------------
+BASE_DIR = Path(__file__).parent.parent
+LOG_DIR  = BASE_DIR / "logs"
+DOCS_DIR = BASE_DIR / "docs"
+LOG_DIR.mkdir(exist_ok=True)
+DOCS_DIR.mkdir(exist_ok=True)
+
+# ---------------------------------------------------------------------------
 # Logging con rotación diaria (7 días de retención)
 # ---------------------------------------------------------------------------
-LOG_DIR = Path(__file__).parent.parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
-
 _root = logging.getLogger()
 _root.setLevel(logging.INFO)
 
@@ -392,74 +401,265 @@ ENTITIES: list[tuple[str, str, str, str]] = [
 
 
 # ---------------------------------------------------------------------------
+# Generación de documentación Markdown
+# ---------------------------------------------------------------------------
+
+def _write_docs(
+    results: list[dict],
+    recreate: bool,
+    start_ts: datetime,
+    end_ts: datetime,
+) -> Path:
+    """
+    Genera el fichero docs/FASE1_INGESTA.md con el estado de la ejecución,
+    descripción de cada entidad y métricas de carga.
+    """
+    duration = (end_ts - start_ts).total_seconds()
+    ok_rows  = [r for r in results if r["status"] == "OK"]
+    err_rows = [r for r in results if r["status"] == "ERROR"]
+
+    total_sf  = sum(r.get("sf_count",  0) for r in ok_rows)
+    total_ins = sum(r.get("inserted",  0) for r in ok_rows)
+    total_upd = sum(r.get("updated",   0) for r in ok_rows)
+    total_db  = sum(r.get("db_after",  0) for r in ok_rows)
+
+    lines: list[str] = []
+    lines += [
+        "# Fase 1 – Ingesta Salesforce → Oracle",
+        "",
+        "## ¿Qué hace esta fase?",
+        "",
+        "Esta fase extrae todas las entidades necesarias de Salesforce mediante la",
+        "**REST API SOQL** (paginación automática de 2.000 registros por página),",
+        "aplana las relaciones anidadas (`RecordType.name`, `Campaign.Name`, etc.)",
+        "y las carga directamente en Oracle **sin generar CSVs intermedios**.",
+        "",
+        "La carga se realiza mediante **MERGE INTO** (upsert):",
+        "- Si el registro **no existe** en Oracle → INSERT.",
+        "- Si el registro **ya existe** y algún campo ha cambiado → UPDATE.",
+        "- Si el registro ya existe y no ha cambiado → se ignora (sin escritura).",
+        "",
+        "La inferencia de tipos Oracle (NUMBER, FLOAT, NVARCHAR2, CLOB) se realiza",
+        "automáticamente a partir de los valores Python nativos del JSON.",
+        "Las columnas CLOB se excluyen de la comparación de cambios (limitación Oracle).",
+        "",
+        "## Conexión",
+        "",
+        "| Parámetro | Valor |",
+        "|-----------|-------|",
+        f"| Host      | `{ENTITIES[0][0]}` ← variable `ORA_HOST` |",
+        "| Proxy     | `PMAT_USR[PMATOWNER]` |",
+        "| Esquema   | `PMATOWNER` |",
+        "| Modo      | oracledb thin (sin cliente Oracle) |",
+        "",
+        "## Ejecución",
+        "",
+        f"- **Fecha/hora inicio:** {start_ts.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"- **Fecha/hora fin:**    {end_ts.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"- **Duración total:**    {duration:.1f} s",
+        f"- **Modo:**              {'RECREAR tablas (--recreate)' if recreate else 'Upsert incremental'}",
+        f"- **Curso académico:**   {CURSO}",
+        "",
+        "## Resumen global",
+        "",
+        "| Métrica | Valor |",
+        "|---------|-------|",
+        f"| Tablas OK    | {len(ok_rows)} / {len(results)} |",
+        f"| Tablas ERROR | {len(err_rows)} |",
+        f"| Registros SF (total) | {total_sf:,} |",
+        f"| Registros en BD (total) | {total_db:,} |",
+        f"| Insertados   | {total_ins:,} |",
+        f"| Actualizados (aprox.) | {total_upd:,} |",
+        "",
+        "## Detalle por entidad",
+        "",
+        "| # | Entidad SF | Tabla Oracle | Registros SF | BD antes | BD después | Insertados | Actualizados | Estado |",
+        "|---|-----------|-------------|:---:|:---:|:---:|:---:|:---:|:---:|",
+    ]
+
+    for i, r in enumerate(results, 1):
+        if r["status"] == "OK":
+            lines.append(
+                f"| {i} | `{r['sf_name']}` | `{r['ora_table']}` "
+                f"| {r['sf_count']:,} | {r['db_before']:,} | {r['db_after']:,} "
+                f"| {r['inserted']:,} | {r['updated']:,} | ✅ OK |"
+            )
+        else:
+            lines.append(
+                f"| {i} | `{r['sf_name']}` | `{r['ora_table']}` "
+                f"| – | – | – | – | – | ❌ ERROR |"
+            )
+
+    if err_rows:
+        lines += [
+            "",
+            "## Errores",
+            "",
+        ]
+        for r in err_rows:
+            lines.append(f"### `{r['sf_name']}`")
+            lines.append(f"```\n{r.get('error', 'Sin detalle')}\n```")
+            lines.append("")
+
+    lines += [
+        "",
+        "## Notas técnicas",
+        "",
+        "- **Paginación SF:** 2.000 registros por página (límite Salesforce Bulk).",
+        "- **Bind variables:** los nombres con caracteres especiales (`.`, `__r`) se",
+        "  sanitizan reemplazando caracteres no alfanuméricos por `_`.",
+        "- **CLOB en change_cond:** Oracle no permite comparar columnas CLOB con `!=`.",
+        "  Estas columnas se actualizan siempre que la fila haya coincidido.",
+        "- **Conteo de actualizados:** aproximado. Se calcula como",
+        "  `registros_SF – insertados`. Los registros coincidentes pero sin cambios",
+        "  no generan UPDATE y podrían inflar esta cifra.",
+        f"- **Log completo:** `logs/sf_extract_all.log`",
+        "",
+        "---",
+        f"*Generado automáticamente el {end_ts.strftime('%Y-%m-%d %H:%M')} UTC*",
+    ]
+
+    doc_path = DOCS_DIR / "FASE1_INGESTA.md"
+    doc_path.write_text("\n".join(lines), encoding="utf-8")
+    return doc_path
+
+
+# ---------------------------------------------------------------------------
 # Ejecución principal: SF → Oracle directo
 # ---------------------------------------------------------------------------
 
-def run() -> dict[str, int]:
+def run(recreate: bool = False) -> list[dict]:
     """
     Ejecuta la ingesta completa: extrae cada entidad de Salesforce y la
     carga directamente en Oracle via upsert (MERGE INTO).
 
+    Args:
+        recreate: si True, elimina y recrea cada tabla antes de cargar.
+
     Returns:
-        Diccionario {entidad: filas_procesadas} (−1 en caso de error).
+        Lista de dicts con métricas por entidad.
     """
+    start_ts = datetime.now(timezone.utc)
+
     logger.info("=" * 70)
     logger.info("FASE 1 – INGESTA SALESFORCE → ORACLE  [INICIO]")
-    logger.info("Curso académico: %s", CURSO)
+    logger.info("Curso académico: %s | Modo: %s",
+                CURSO, "RECREAR tablas" if recreate else "upsert incremental")
     logger.info("=" * 70)
 
     sf = SalesforceExtractor()
     sf.authenticate()
 
-    results: dict[str, int] = {}
+    results: list[dict] = []
 
     with OracleConnector() as ora:
         for sf_name, ora_table, pk_col, soql in ENTITIES:
             logger.info("-" * 60)
-            logger.info("Procesando entidad: %s → %s", sf_name, ora_table)
+            logger.info("▶ Procesando: %s → %s", sf_name, ora_table)
+            row: dict = {"sf_name": sf_name, "ora_table": ora_table}
+
             try:
-                # 1. Extraer de Salesforce (JSON nativo, list[dict])
+                # ── 1. Extraer de Salesforce ─────────────────────────────
                 records_raw = sf.query(soql)
+                logger.info("  SF: %d registros obtenidos", len(records_raw))
+
                 if not records_raw:
-                    logger.warning("Sin registros para %s.", sf_name)
-                    results[sf_name] = 0
+                    logger.warning("  Sin registros en SF para %s.", sf_name)
+                    row.update({"status": "OK", "sf_count": 0,
+                                "db_before": 0, "db_after": 0,
+                                "inserted": 0, "updated": 0})
+                    results.append(row)
                     continue
 
-                # 2. Aplanar relaciones anidadas (LK__r.name, Campaign.X, etc.)
+                # ── 2. Aplanar relaciones anidadas ───────────────────────
                 flat_records = [
                     SalesforceExtractor._flatten_record(r)
                     for r in records_raw
                 ]
 
-                # 3. Upsert en Oracle
-                n = ora.upsert_records(flat_records, ora_table, pk_col)
-                results[sf_name] = n
-                logger.info("OK  %-20s → %-25s %d filas", sf_name, ora_table, n)
+                # ── 3. Recrear tabla si se pide ──────────────────────────
+                if recreate:
+                    ora.drop_table_if_exists(ora_table)
+
+                # ── 4. Upsert en Oracle ──────────────────────────────────
+                metrics = ora.upsert_records(flat_records, ora_table, pk_col)
+
+                row.update({"status": "OK", **metrics})
+                results.append(row)
+
+                logger.info(
+                    "  ✔ %-20s | SF: %6d | BD antes: %6d | "
+                    "BD después: %6d | Insertados: %6d | Actualizados: ~%6d",
+                    ora_table,
+                    metrics["sf_count"],
+                    metrics["db_before"],
+                    metrics["db_after"],
+                    metrics["inserted"],
+                    metrics["updated"],
+                )
 
             except Exception as exc:
-                logger.error("ERROR en '%s': %s", sf_name, exc, exc_info=True)
-                results[sf_name] = -1
+                logger.error("  ✖ ERROR en '%s': %s", sf_name, exc, exc_info=True)
+                row.update({"status": "ERROR", "error": str(exc)})
+                results.append(row)
+
+    end_ts = datetime.now(timezone.utc)
 
     # ------------------------------------------------------------------
-    # Resumen final
+    # Resumen en consola
     # ------------------------------------------------------------------
+    ok_rows  = [r for r in results if r["status"] == "OK"]
+    err_rows = [r for r in results if r["status"] == "ERROR"]
+
     logger.info("=" * 70)
     logger.info("FASE 1 – INGESTA SALESFORCE → ORACLE  [FIN]")
     logger.info("=" * 70)
-    ok  = [(n, c) for n, c in results.items() if c >= 0]
-    err = [(n, c) for n, c in results.items() if c < 0]
-    for name, count in ok:
-        logger.info("  [OK]    %-25s %d filas", name, count)
-    for name, _ in err:
-        logger.error("  [ERROR] %s", name)
-
-    if err:
-        logger.warning("Fase 1 completada con %d errores.", len(err))
+    logger.info("")
+    logger.info("%-22s %8s %10s %10s %10s %10s",
+                "Entidad", "SF", "BD antes", "BD después", "Insertados", "Actualizados")
+    logger.info("-" * 80)
+    for r in results:
+        if r["status"] == "OK":
+            logger.info(
+                "%-22s %8d %10d %10d %10d %10d",
+                r["sf_name"], r["sf_count"], r["db_before"],
+                r["db_after"], r["inserted"], r["updated"],
+            )
+        else:
+            logger.error("%-22s  ERROR: %s", r["sf_name"], r.get("error", "")[:60])
+    logger.info("-" * 80)
+    logger.info(
+        "%-22s %8d %10s %10d %10d %10d",
+        "TOTAL",
+        sum(r.get("sf_count",  0) for r in ok_rows),
+        "",
+        sum(r.get("db_after",  0) for r in ok_rows),
+        sum(r.get("inserted",  0) for r in ok_rows),
+        sum(r.get("updated",   0) for r in ok_rows),
+    )
+    logger.info("")
+    if err_rows:
+        logger.warning("Fase 1 completada con %d errores.", len(err_rows))
     else:
         logger.info("Fase 1 completada sin errores.")
+
+    # ------------------------------------------------------------------
+    # Documentación Markdown
+    # ------------------------------------------------------------------
+    doc_path = _write_docs(results, recreate, start_ts, end_ts)
+    logger.info("Documentación generada: %s", doc_path)
 
     return results
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(
+        description="Fase 1: Ingesta Salesforce → Oracle"
+    )
+    parser.add_argument(
+        "--recreate",
+        action="store_true",
+        help="Elimina y recrea todas las tablas Oracle antes de cargar (útil en setup inicial)",
+    )
+    args = parser.parse_args()
+    run(recreate=args.recreate)
