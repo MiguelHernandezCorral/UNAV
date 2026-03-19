@@ -141,6 +141,23 @@ ACT_RENAME: dict[str, str] = {
     "CAMPAIGN.LK_TIPOACTIVIDADPROMOCION__R.NAME":       "Campaign.LK_tipoActividadPromocion__r.Name",
 }
 
+# ---------------------------------------------------------------------------
+# Renames para tablas HIST (cargadas desde el Excel histórico)
+# Las columnas del Excel ya están en formato "notebook"; sólo se necesitan
+# ajustes puntuales respecto a las tablas Oracle API.
+# ---------------------------------------------------------------------------
+# OPPORTUNITY_HIST: TITULACION = inicial, TITULACION_DEF = definitiva.
+# Renombramos para que "TITULACION" sea siempre la definitiva (consistente con API).
+OPP_HIST_RENAME: dict[str, str] = {
+    "TITULACION":     "TITULACION_INICIAL",  # renombrar la inicial para liberar el nombre
+    "TITULACION_DEF": "TITULACION",          # la definitiva toma el nombre estándar
+}
+# ECBS_HIST, STAGE_HISTORY_HIST, ACTIVITY_HIST usan los mismos renames que las
+# tablas Oracle API (los valores en Oracle ya están en mayúsculas).
+ECBS_HIST_RENAME  = ECBS_RENAME
+STAGE_HIST_RENAME = STAGE_RENAME
+ACT_HIST_RENAME   = ACT_RENAME
+
 
 # ===========================================================================
 # CAMPOS ESPERADOS POR EL NOTEBOOK (columnas_seleccionadas finales)
@@ -596,8 +613,8 @@ COLUMNAS_FINALES = [
     "NU_NOTA_MEDIA_ADMISION", "NU_NOTA_MEDIA_1_BACH__PC",
     "CH_PRUEBAS_CALIFICADAS", "NU_RESULTADO_ADMISION_PUNTOS",
     "PL_RESOLUCION_DEFINITIVA", "TITULACION", "CENTROENSENANZA",
-    "MINIMUMPAYMENTPAYED", "PAID_AMOUNT", "CH_PAGO_SUPERIOR",
-    "CH_MATRICULA_SUJETA_BECA", "CH_AYUDA_FINANCIACION",
+    "MINIMUMPAYMENTPAYED", "PAID_AMOUNT", "PAID_PERCENT", "CH_PAGO_SUPERIOR",
+    "CH_MATRICULA_SUJETA_BECA", "CH_AYUDA_FINANCIACION", "CU_IMPORTE_TOTAL",
     "CH_VISITACAMPUS__PC", "CH_ENTREVISTA_PERSONAL__PC",
     "ACC_DTT_FECHAULTIMAACTIVIDAD", "NU_PREFERENCIA",
     "PL_Etapa__c", "PL_Subetapa__c",
@@ -614,11 +631,185 @@ COLUMNAS_FINALES = [
     "CH_ALUMNO__PC", "CH_ESTUDIANTE__PC", "CH_ANTIGUO_ALUMNO__PC",
     "CH_ALUMNI__PC", "CH_ANTIGUOALUMNO_INTERCAMBIO",
     "CH_HIJO_ANTIGUO_ALUMNO__PC",
-    "CreatedDate",
+    "CreatedDate", "NU_MEDIA_EXPEDIENTE_UNIVERSITA",
+    "FUENTE_DATOS",  # 'SF_2026_27' o 'HISTORICO' — permite filtrar para entrenar/predecir
 ]
 
 
-def run(recreate: bool = False) -> None:
+def _tabla_existe(ora: OracleConnector, tabla: str) -> bool:
+    """Devuelve True si la tabla existe en el schema Oracle."""
+    try:
+        cur = ora.conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM all_tables WHERE owner=:s AND table_name=:t",
+            s=ora.schema.upper(), t=tabla.upper(),
+        )
+        existe = cur.fetchone()[0] > 0
+        cur.close()
+        return existe
+    except Exception:
+        return False
+
+
+def _cargar_historico(ora: OracleConnector) -> pd.DataFrame | None:
+    """
+    Carga y procesa las tablas históricas (_HIST) cargadas desde el Excel.
+    Aplica el mismo pipeline de limpieza que los datos actuales de SF, con
+    las adaptaciones necesarias para el formato del Excel:
+      - Join Account usa ACCOUNTID ↔ ID18 (18 chars, no ID de 15 chars)
+      - YEARPERSONBIRTHDATE ya calculado en ACCOUNT_HIST
+      - TITULACION viene de la columna TITULACION_DEF (renombrada)
+      - CENTROENSENANZA viene directamente de ACCOUNT_HIST
+
+    Returns:
+        DataFrame expandido (1 fila por etapa × oportunidad) o None si las
+        tablas HIST no existen en Oracle (excel_loader aún no ejecutado).
+    """
+    tablas_requeridas = [
+        "OPPORTUNITY_HIST", "ACCOUNT_HIST", "ECBS_HIST",
+        "STAGE_HISTORY_HIST", "ACTIVITY_HIST"
+    ]
+    faltan = [t for t in tablas_requeridas if not _tabla_existe(ora, t)]
+    if faltan:
+        logger.warning(
+            "Tablas HIST no encontradas: %s. "
+            "Ejecuta primero: python src/excel_loader.py --recreate",
+            faltan,
+        )
+        return None
+
+    logger.info("─" * 60)
+    logger.info("  [HISTÓRICO] Cargando tablas HIST desde Oracle...")
+
+    def load_hist(tabla: str) -> pd.DataFrame:
+        rows = ora.read_table(tabla)
+        df = pd.DataFrame(rows)
+        logger.info("    %s: %d filas × %d cols", tabla, *df.shape)
+        return df
+
+    df_opp_h   = load_hist("OPPORTUNITY_HIST")
+    df_acc_h   = load_hist("ACCOUNT_HIST")
+    df_ecbs_h  = load_hist("ECBS_HIST")
+    df_stage_h = load_hist("STAGE_HISTORY_HIST")
+    df_act_h   = load_hist("ACTIVITY_HIST")
+
+    # Renames
+    df_opp_h   = df_opp_h.rename(columns={k: v for k, v in OPP_HIST_RENAME.items()   if k in df_opp_h.columns})
+    df_ecbs_h  = df_ecbs_h.rename(columns={k: v for k, v in ECBS_HIST_RENAME.items()  if k in df_ecbs_h.columns})
+    df_stage_h = df_stage_h.rename(columns={k: v for k, v in STAGE_HIST_RENAME.items() if k in df_stage_h.columns})
+    df_act_h   = df_act_h.rename(columns={k: v for k, v in ACT_HIST_RENAME.items()   if k in df_act_h.columns})
+
+    # Eliminar columnas >90% NA
+    df_opp_h  = eliminar_columnas_na(df_opp_h)
+    df_acc_h  = eliminar_columnas_na(df_acc_h)
+    df_ecbs_h = eliminar_columnas_na(df_ecbs_h)
+
+    logger.info(
+        "    Tras NA >90%%: opp=%d cols, acc=%d cols, ecbs=%d cols",
+        len(df_opp_h.columns), len(df_acc_h.columns), len(df_ecbs_h.columns),
+    )
+
+    # Target (usa historial con columnas renombradas: PL_Etapa__c, PL_Subetapa__c, LK_Oportunidad__c)
+    df_opp_h = crear_target(df_opp_h, df_stage_h)
+    n_target1 = int(df_opp_h["target"].sum())
+    logger.info("    [HISTÓRICO] Target=1: %d | Target=0: %d",
+                n_target1, len(df_opp_h) - n_target1)
+
+    # JOIN Oportunidad × Cuenta (clave ID18 en ACCOUNT_HIST)
+    acc_join_key = "ID18" if "ID18" in df_acc_h.columns else "ID"
+    df_unido_h = pd.merge(
+        df_opp_h, df_acc_h,
+        left_on="ACCOUNTID", right_on=acc_join_key,
+        how="left", suffixes=("", "_cuenta")
+    )
+    dup_cols = [c for c in df_unido_h.columns if c.endswith("_cuenta")]
+    df_unido_h = df_unido_h.drop(columns=dup_cols)
+    logger.info("    [HISTÓRICO] JOIN opp×cuenta: %d filas × %d cols",
+                *df_unido_h.shape)
+
+    # YEARPERSONBIRTHDATE: ya presente en ACCOUNT_HIST; derivar si no está
+    if "YEARPERSONBIRTHDATE" not in df_unido_h.columns:
+        df_unido_h["YEARPERSONBIRTHDATE"] = pd.to_datetime(
+            df_unido_h.get("PERSONBIRTHDATE"), errors="coerce"
+        ).dt.year
+
+    # PL_TIPOSOLICITUD
+    if "RECORDTYPENAME" in df_unido_h.columns:
+        df_unido_h["PL_TIPOSOLICITUD"] = np.select(
+            [
+                df_unido_h["RECORDTYPENAME"].str.contains("rado", case=False, na=False),
+                df_unido_h["RECORDTYPENAME"].str.contains("ster", case=False, na=False),
+            ],
+            ["Grado", "Máster"],
+            default="Otro",
+        )
+
+    # PLAZO_ADMISION_LIMPIO (misma lógica que datos actuales)
+    def _normalizar_plazo_h(row) -> str:
+        tipo = str(row.get("PL_TIPOSOLICITUD", "")).lower()
+        if "ster" in tipo:
+            return "Rolling"
+        plazo = row.get("PL_PLAZO_ADMISION")
+        if pd.isna(plazo):
+            return "Rolling"
+        plazo = str(plazo).strip().lower()
+        if "dic" in plazo:
+            return "Diciembre"
+        if "mar" in plazo:
+            return "Marzo"
+        return "Otros"
+
+    df_unido_h["PLAZO_ADMISION_LIMPIO"] = df_unido_h.apply(_normalizar_plazo_h, axis=1)
+
+    # JOIN con ECBS
+    ecbs_vars = ["LK_oportunidad__c", "FO_rentaFam_ges__c",
+                 "CU_precioOrdinario_def__c", "CU_precioAplicado_def__c"]
+    ecbs_vars = [v for v in ecbs_vars if v in df_ecbs_h.columns]
+    ecbs_join_key = "LK_oportunidad__c" if "LK_oportunidad__c" in df_ecbs_h.columns else "ID"
+    df_unido_h = pd.merge(
+        df_unido_h,
+        df_ecbs_h[ecbs_vars],
+        left_on="ID", right_on=ecbs_join_key,
+        how="left"
+    )
+
+    if "CU_precioAplicado_def__c" in df_unido_h.columns and \
+       "CU_precioOrdinario_def__c" in df_unido_h.columns:
+        df_unido_h["PORCENTAJE_PAGADO_FINAL"] = (
+            pd.to_numeric(df_unido_h["CU_precioAplicado_def__c"], errors="coerce") /
+            pd.to_numeric(df_unido_h["CU_precioOrdinario_def__c"], errors="coerce")
+        ) * 100
+        mask_inv = (
+            (pd.to_numeric(df_unido_h["CU_precioOrdinario_def__c"], errors="coerce") <= 0) |
+            (df_unido_h["PORCENTAJE_PAGADO_FINAL"] < 0) |
+            (df_unido_h["PORCENTAJE_PAGADO_FINAL"] > 100)
+        )
+        df_unido_h.loc[mask_inv, "PORCENTAJE_PAGADO_FINAL"] = np.nan
+
+    # Calcular tiempos en etapa
+    df_stage_h_t = calcular_tiempos_etapas(df_stage_h)
+    logger.info("    [HISTÓRICO] tiempo_etapa_dias: min=%d, max=%d, media=%.1f",
+                df_stage_h_t["tiempo_etapa_dias"].min(),
+                df_stage_h_t["tiempo_etapa_dias"].max(),
+                df_stage_h_t["tiempo_etapa_dias"].mean())
+
+    # Expansión por hitos (leakage temporal) + expand 1 fila por etapa
+    cols_etapa = [c for c in ["PL_SUBETAPA", "STAGENAME"] if c in df_unido_h.columns]
+    df_unido_h_sin_etapa = df_unido_h.drop(columns=cols_etapa)
+    df_hist_expandido = limpiar_historial_por_hitos(df_stage_h_t, df_unido_h_sin_etapa)
+    logger.info("    [HISTÓRICO] Dataset expandido: %d filas × %d cols",
+                *df_hist_expandido.shape)
+
+    # Integrar actividades acumuladas
+    df_hist_expandido = integrar_actividades_progresivo(df_hist_expandido, df_act_h)
+
+    # Etiquetar la fuente de datos
+    df_hist_expandido["FUENTE_DATOS"] = "HISTORICO"
+
+    return df_hist_expandido
+
+
+def run(recreate: bool = False, include_historical: bool = False) -> None:
     start_ts = datetime.now(timezone.utc)
     metricas: dict = {}
     TOTAL_STEPS = 15
@@ -794,12 +985,44 @@ def run(recreate: bool = False) -> None:
         df_unido_sin_etapa = df_unido.drop(columns=cols_etapa)
 
         df_definitivo = limpiar_historial_por_hitos(df_stage_t, df_unido_sin_etapa)
-        metricas["filas_raw"] = len(df_definitivo)
+        df_definitivo["FUENTE_DATOS"] = "SF_2026_27"
         logger.info("  Dataset expandido (1 fila por etapa × oportunidad): %d filas", len(df_definitivo))
+
+        # ── 11b. COMBINACIÓN CON DATOS HISTÓRICOS (opcional) ───────────────
+        if include_historical:
+            logger.info("─" * 60)
+            logger.info("PASO 11b │ Carga y combinación con datos históricos del Excel")
+            logger.info("─" * 60)
+            df_hist = _cargar_historico(ora)
+            if df_hist is not None:
+                n_actual = len(df_definitivo)
+                n_hist   = len(df_hist)
+                df_definitivo = pd.concat(
+                    [df_definitivo, df_hist], ignore_index=True, sort=False
+                )
+                metricas["filas_actuales"]  = n_actual
+                metricas["filas_historico"] = n_hist
+                logger.info(
+                    "  Datos actuales: %d filas | Histórico: %d filas | Total: %d filas",
+                    n_actual, n_hist, len(df_definitivo),
+                )
+            else:
+                logger.warning("  Sin datos históricos disponibles. Continuando solo con datos actuales.")
+
+        metricas["filas_raw"] = len(df_definitivo)
 
         # ── 12. ACTIVIDADES ACUMULADAS ─────────────────────────────────────
         _step(12, TOTAL_STEPS, "Integración de actividades acumuladas")
-        df_definitivo = integrar_actividades_progresivo(df_definitivo, df_act)
+        # Las actividades ya se integran dentro de _cargar_historico para el histórico;
+        # aquí solo se procesan los datos actuales (SF_2026_27).
+        if not include_historical:
+            df_definitivo = integrar_actividades_progresivo(df_definitivo, df_act)
+        else:
+            # Los datos actuales aún no tienen actividades; los históricos ya las tienen.
+            df_actual = df_definitivo[df_definitivo["FUENTE_DATOS"] == "SF_2026_27"].copy()
+            df_hist_ya = df_definitivo[df_definitivo["FUENTE_DATOS"] == "HISTORICO"].copy()
+            df_actual = integrar_actividades_progresivo(df_actual, df_act)
+            df_definitivo = pd.concat([df_actual, df_hist_ya], ignore_index=True, sort=False)
 
         # ── 13. LEAKAGE DE PAGO EN ETAPAS TEMPRANAS ───────────────────────
         _step(13, TOTAL_STEPS, "Corrección de leakage de pago en etapas tempranas")
@@ -886,5 +1109,12 @@ if __name__ == "__main__":
         "--recreate", action="store_true",
         help="Elimina y recrea DATASET_LIMPIO antes de insertar"
     )
+    parser.add_argument(
+        "--include-historical", action="store_true",
+        help=(
+            "Combina los datos actuales de SF (2026/27) con el histórico del Excel "
+            "(tablas *_HIST cargadas por excel_loader.py). Necesario para entrenar el modelo."
+        )
+    )
     args = parser.parse_args()
-    run(recreate=args.recreate)
+    run(recreate=args.recreate, include_historical=args.include_historical)

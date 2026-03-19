@@ -28,9 +28,9 @@ lista para modelado con PyCaret.
 
 ## Ejecución
 
-- **Fecha/hora inicio:** 2026-03-19 10:20:27 UTC
-- **Fecha/hora fin:**    2026-03-19 10:20:40 UTC
-- **Duración total:**    12.1 s
+- **Fecha/hora inicio:** 2026-03-19 11:31:51 UTC
+- **Fecha/hora fin:**    2026-03-19 11:32:04 UTC
+- **Duración total:**    13.4 s
 - **Modo:**              RECREAR tabla (--recreate)
 
 ## Métricas del dataset
@@ -40,7 +40,7 @@ lista para modelado con PyCaret.
 | Filas tras join (antes limpieza) | 53,343 |
 | Filas con target nulo eliminadas | 0 |
 | Filas finales en DATASET_LIMPIO  | 53,343 |
-| Columnas seleccionadas           | 52 |
+| Columnas seleccionadas           | 53 |
 | Target = 1 (matriculados)        | 0 |
 | Target = 0 (no matriculados)     | 53,343 |
 | Tasa conversión                  | 0.0 % |
@@ -129,4 +129,4 @@ si necesita renombrado, si es derivado o si está ausente.
 - **Log completo**: `logs/cleaner.log`
 
 ---
-*Generado automáticamente el 2026-03-19 10:20 UTC*
+*Generado automáticamente el 2026-03-19 11:32 UTC*

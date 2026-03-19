@@ -99,6 +99,9 @@ def _coerce_value(value, ora_type: str):
         if isinstance(value, bool):
             return int(value)
         if isinstance(value, (int, float)):
+            # NaN e infinito no son válidos en columnas NUMBER de Oracle → NULL
+            if isinstance(value, float) and (value != value or abs(value) == float("inf")):
+                return None
             return value
         try:
             return float(value)
