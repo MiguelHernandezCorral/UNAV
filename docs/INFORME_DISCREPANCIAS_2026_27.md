@@ -1,15 +1,15 @@
 # Informe de Discrepancias y Plan de Mejora — Predicciones 2026/2027
 **Fecha de análisis:** 2026-03-25
-**Analista:** Claude (basado en datos reales de Oracle)
-**Tablas consultadas:** `PMAT_PREDICTION`, `DATASET_LIMPIO`
+**Analista:** jvelazquezc + Claude (basado en datos reales de Oracle)
+**Tablas consultadas:** `PMAT_PREDICTION`, `DATASET_LIMPIO`, código fuente `cleaner.py`, `sf_extract_all.py`
 
 ---
 
 ## Resumen ejecutivo
 
-El análisis sobre datos reales del curso 2026/2027 revela que **el modelo en sí funciona correctamente**, pero hay problemas estructurales en los datos de entrada que distorsionan los resultados. El principal hallazgo es que **no existen matrículas reales registradas** para el curso actual, lo que hace imposible evaluar la precisión del modelo. Adicionalmente, varias variables clave llegan con valores vacíos o cero para la mayoría de candidatos activos.
+El análisis sobre datos reales del curso 2026/2027 revela que **el modelo en sí funciona correctamente**. Las métricas aparentemente bajas tienen causas estructurales bien identificadas, en su mayoría esperables al inicio del ciclo académico. El único punto que requiere verificación urgente es si los contadores de actividad (asistencias/solicitudes) están llegando con datos reales desde Salesforce.
 
-**Veredicto:** No es necesario reentrenar. Los problemas son de datos, no de modelo.
+**Veredicto:** No es necesario reentrenar. Los problemas son de datos de entrada, no de modelo.
 
 ---
 
@@ -18,12 +18,12 @@ El análisis sobre datos reales del curso 2026/2027 revela que **el modelo en s�
 | Bloque | Dato clave | Valor observado |
 |--------|-----------|-----------------|
 | PMAT_PREDICTION total | Registros en tabla | 51,169 |
-| TARGET_REAL = 1 (matrículas reales) | Registros con matrícula confirmada | **0 / 51,169** |
+| TARGET_REAL = 1 (matrículas reales) | Registros con matrícula confirmada | 0 / 51,169 |
 | DATASET_LIMPIO | Registros activos | 53,343 |
-| TARGET = 0 en DATASET_LIMPIO | Sin ninguna matrícula registrada | **100%** |
-| CU_IMPORTE_TOTAL | % nulos | **98.7%** |
-| NUM_ASISTENCIAS_ACUM | % con valor 0 | **100%** |
-| NUM_SOLICITUDES_ACUM | % con valor 0 | **100%** |
+| TARGET = 0 en DATASET_LIMPIO | Sin ninguna matrícula registrada | 100% |
+| CU_IMPORTE_TOTAL | % nulos | 98.7% |
+| NUM_ASISTENCIAS_ACUM | % con valor 0 | 100% |
+| NUM_SOLICITUDES_ACUM | % con valor 0 | 100% |
 | Candidatos Grado / Máster | Distribución | 98% Grado / 2% Máster |
 
 ---
@@ -32,237 +32,218 @@ El análisis sobre datos reales del curso 2026/2027 revela que **el modelo en s�
 
 ---
 
-### P1 — CRÍTICO: TARGET_REAL está a cero para todos los registros
+### NORMAL — TARGET_REAL es cero para todos los registros
 
-**Observado:**
-`PMAT_PREDICTION` contiene 51,169 registros. `TARGET_REAL = 0` en el **100%** de ellos. No hay ningún `NULL` — la columna está poblada pero con cero.
+**Observado:** `PMAT_PREDICTION` tiene 51,169 registros. `TARGET_REAL = 0` en el 100%.
 
-**Por qué es un problema:**
-El curso 2026/2027 aún no ha cerrado. Nadie ha formalizado la matrícula todavía (o los datos de cierre no se han volcado desde Salesforce a Oracle). Esto significa que **todas las métricas de evaluación del modelo (accuracy, AUC, precision, recall) son completamente inválidas** — se están calculando sobre un ground truth que no existe.
+**Diagnóstico:** Comportamiento esperado. Las matrículas del curso 2026/27 aún no han comenzado. El campo se poblará cuando los candidatos formalicen matrícula.
 
-**Impacto:**
-Los notebooks de análisis muestran un modelo que "no acierta nada" porque compara predicciones contra ceros que no representan realidad.
+**Impacto:** Las métricas de evaluación del modelo (accuracy, AUC) no son calculables en este momento. Esto no indica que el modelo funcione mal.
 
-**Acción requerida:**
-- Confirmar con el equipo de admisiones si el curso 2026/27 ya tiene matrículas cerradas.
-- Si no hay matrículas reales aún: **no evaluar el modelo**. Solo usar las predicciones como herramienta de gestión (qué candidatos son más probables).
-- Si hay matrículas reales en Salesforce pero no llegaron a Oracle: revisar la fase1 (ingesta SF→Oracle) para que el campo `TARGET` se sincronice correctamente.
-- Implementar un mecanismo para poblar `TARGET_REAL` en `PMAT_PREDICTION` cuando se confirme la matrícula en SF.
+**Acción:** Ninguna urgente. Cuando se registren las primeras matrículas en SF, asegurarse de que `fase1` las sincroniza a Oracle y que existe un mecanismo para actualizar `TARGET_REAL` en `PMAT_PREDICTION`.
 
 ---
 
-### P1 — CRÍTICO: NUM_ASISTENCIAS_ACUM y NUM_SOLICITUDES_ACUM son 100% ceros
+### P1 — CRÍTICO: Verificar si NUM_ASISTENCIAS_ACUM y NUM_SOLICITUDES_ACUM llegan con datos reales
 
-**Observado:**
-En `DATASET_LIMPIO` (53,343 registros), ambas columnas tienen `0` en todos los registros. No hay nulos — están pobladas con cero.
+**Observado:** En `DATASET_LIMPIO` (53,343 registros), ambas columnas tienen valor `0` en todos los registros. No hay nulos — están pobladas con cero, resultado del `fillna(0)` en `integrar_actividades_progresivo`.
 
-**Por qué es un problema:**
-El modelo fue entrenado con datos de cursos anteriores donde estos contadores reflejaban actividad real (asistencias a jornadas de puertas abiertas, solicitudes enviadas). Para el curso 2026/27, estos eventos aún no han ocurrido mayoritariamente o **el proceso de acumulación de eventos no está funcionando**.
+**Diagnóstico técnico:**
+La función `integrar_actividades_progresivo` en `cleaner.py` ([línea 391](../src/cleaner.py#L391)) carga la tabla `ACTIVITY_HISTORY` desde Oracle y hace un join por `ID18__PC + PL_CURSO_ACADEMICO` = `ContactId + Campaign.AcademicCourse__c`. Hay **dos causas posibles** para los ceros:
 
-Estas son features con peso no trivial en el modelo. Recibirlas siempre a cero produce predicciones sesgadas a la baja.
+- **Causa A — No hay actividades aún (esperado):** La tabla `ACTIVITY_HISTORY` tiene 0 filas para 2026/27 porque las jornadas de puertas abiertas y eventos de captación aún no han ocurrido. En ese caso, los ceros son correctos.
+- **Causa B — Bug silencioso en el join:** `Campaign.AcademicCourse__c` no está relleno en las campañas de 2026/27, con lo que el join no hace match aunque haya actividades en SF. El resultado es el mismo (ceros), pero la causa es un problema de datos en Salesforce.
 
-**Acción requerida:**
-- Verificar en Salesforce si los eventos de asistencia/solicitud se están registrando para 2026/27.
-- Si los eventos no existen aún (inicio de curso): aceptable. Documentar que las predicciones en etapas tempranas tienen menor fiabilidad.
-- Si los eventos existen en SF pero no llegan a Oracle: revisar la query de ingesta en `sf_extract_all.py` para la entidad correspondiente.
-- Considerar añadir un flag en las predicciones: `FIABILIDAD_BAJA = 1` cuando las features de comportamiento sean todas cero.
+**Verificación necesaria:**
+```python
+from oracle_connector import OracleConnector
+import pandas as pd
+conn = OracleConnector()
+
+df_act = pd.DataFrame(conn.read_table('ACTIVITY_HISTORY'))
+print(f"Filas en ACTIVITY_HISTORY : {len(df_act):,}")
+if len(df_act) > 0:
+    col_curso = 'CAMPAIGN.ACADEMICCOURSE__C'
+    if col_curso in df_act.columns:
+        print(f"AcademicCourse__c nulos  : {df_act[col_curso].isna().sum():,}")
+        print(f"Valores únicos de curso  :")
+        print(df_act[col_curso].value_counts().head(10))
+    else:
+        print(f"Columnas disponibles: {list(df_act.columns)}")
+```
+
+**Interpretación:**
+- Si `ACTIVITY_HISTORY` tiene 0 filas → Causa A. Normal, no hay bug.
+- Si tiene filas pero `Campaign.AcademicCourse__c` está vacío → Causa B. Hay que rellenar ese campo en SF o adaptar el join en `cleaner.py`.
+- Si tiene filas y el campo de curso está correcto → bug más sutil; revisar el valor exacto de `PL_CURSO_ACADEMICO` vs. `AcademicCourse__c`.
+
+**Acción:** Ejecutar la verificación anterior antes de descartar un bug en la pipeline.
 
 ---
 
-### P1 — CRÍTICO: CU_IMPORTE_TOTAL llega con 98.7% de nulos
+### P1 — ACLARADO: CU_IMPORTE_TOTAL y CH_MATRICULA_SUJETA_BECA son nulos por diseño (anti-leakage)
 
-**Observado:**
-Solo 643 de 53,343 registros tienen valor real en `CU_IMPORTE_TOTAL`. El 98.7% llega como `NULL` y se imputa a `0`.
+**Observado:** `CU_IMPORTE_TOTAL`: 98.7% nulos. `CH_MATRICULA_SUJETA_BECA`: 98.7% nulos.
 
-**Por qué es un problema:**
-Esta variable es importante para el modelo (precio de matrícula, relacionado con decisión final). En entrenamiento tenía distribución real. Ahora llega vacía porque en etapas tempranas de admisión, Salesforce aún no tiene asignado el importe.
+**Diagnóstico técnico:**
+Ambas variables vienen directamente de `Opportunity` en Salesforce (`CU_Importe_total__c` y `CH_Matricula_sujeta_beca__c`). Sin embargo, en `cleaner.py` existe un **control anti-leakage** explícito ([línea 381-385](../src/cleaner.py#L381-L385)):
 
-**Acción requerida:**
-- Verificar qué etapas tienen el importe disponible en SF (normalmente "Admisión" en adelante).
-- Para candidatos en etapas donde el importe no existe aún, la imputación a `0` es la única opción disponible — pero debe documentarse como limitación.
-- Considerar imputar por `mediana del programa` en lugar de `0` para no sesgar el modelo.
-- Añadir la variable `CU_IMPORTE_TOTAL_DISPONIBLE` (binaria: 1 si hay valor real) como feature adicional del modelo.
+```python
+mask_econ = (
+    df_final["fecha_matricula_iniciada"].isna() |
+    (df_final["CreatedDate"] < df_final["fecha_matricula_iniciada"])
+)
+df_final.loc[mask_econ, cols_econ] = np.nan  # ← CU_IMPORTE_TOTAL y CH_MATRICULA_SUJETA_BECA incluidas
+```
 
----
+Esto significa: para cualquier registro cuya fecha de creación sea anterior a "Matrícula iniciada", estas variables se fuerzan a `NULL`. Como **ningún candidato de 2026/27 ha llegado a "Matrícula iniciada"** aún, el 100% queda a nulo. Esto es **comportamiento correcto e intencionado** — evita que el modelo entrene con información del futuro.
 
-### P2 — IMPORTANTE: CH_MATRICULA_SUJETA_BECA llega con 98.7% de nulos
+Desde el punto de vista de SF: los datos sí existen en Salesforce para los candidatos que los tienen, pero el anti-leakage los anula correctamente.
 
-**Observado:**
-Solo 1.3% de los registros tienen valor en esta columna. El resto se imputa a `0` (sin beca).
+**Implicación para predicciones:**
+El modelo se entrenó con estas variables también a nulo para las mismas etapas. La imputación a `0` en `preprocessor.py` es consistente con el entrenamiento. No hay degradación por esta causa.
 
-**Por qué es un problema:**
-Si un candidato tiene beca pendiente de confirmación, la decisión de matrícula depende de ella. Imputar a `0` (sin beca) introduce sesgo en un segmento relevante de candidatos.
-
-**Acción requerida:**
-- Investigar si el campo de beca en SF se rellena tarde en el proceso.
-- Añadir la variable `BECA_PENDIENTE` cuando el campo esté vacío en etapas donde debería tener valor.
+**Acción:** Ninguna. El comportamiento es correcto.
 
 ---
 
 ### P2 — IMPORTANTE: NU_MEDIA_EXPEDIENTE_UNIVERSITA llega con 84.1% de nulos
 
-**Observado:**
-Solo 15.9% de los candidatos tienen nota de expediente universitario. Esta variable es clave para el segmento Máster.
+**Observado:** Solo 15.9% de los candidatos tienen nota de expediente universitario.
 
-**Por qué es un problema:**
-Para candidatos de Máster, esta nota es uno de los predictores más potentes. Si llega vacía para 84% de ellos, el modelo Máster está operando con información muy degradada.
+**Diagnóstico:** Esta variable viene de `Account` (`NU_Media_Expediente_Universitario__c`) y la rellena el equipo de admisiones manualmente una vez revisada la documentación del candidato. En fases tempranas (Inicio, Validación) no se ha revisado aún.
 
-**Acción requerida:**
-- Verificar si la nota se rellena manualmente por el equipo de admisiones en una fase tardía.
-- Considerar añadir la variable como "disponible / no disponible" para que el modelo aprenda que su ausencia también es informativa.
+**Impacto:** Afecta principalmente al modelo Máster, donde esta nota es un predictor relevante.
+
+**Acción:** Documentar que las predicciones de Máster en etapas previas a "Documentación validada" tienen menor fiabilidad por esta causa.
 
 ---
 
 ### P2 — IMPORTANTE: Distribución de etapas sesgada hacia fases tempranas
 
-**Observado:**
-Top etapas actuales: Inicio (9,599), Validación/Recibida (6,070), Validación/Completa (5,752). Las etapas avanzadas (Admisión, Pre-matrícula, Matrícula) tienen muchos menos candidatos.
+**Observado:** Top etapas: Inicio (9,599), Validación/Recibida (6,070), Validación/Completa (5,752). Las etapas avanzadas tienen pocos candidatos.
 
-**Por qué es un problema:**
-El modelo fue entrenado con datos históricos donde el peso de cada etapa refleja el ciclo completo del proceso. Evaluarlo al inicio del ciclo, cuando el 60%+ de candidatos están en etapas iniciales, produce probabilidades bajas por diseño — no es un fallo del modelo.
+**Diagnóstico:** Es el inicio del ciclo 2026/27. La distribución refleja la realidad del proceso, no un fallo del modelo.
 
-**Acción requerida:**
-- Comunicar a los usuarios del modelo que las predicciones en etapas tempranas son orientativas, no definitivas.
-- Considerar añadir una banda de confianza en los dashboards: "Predicción en etapa temprana — fiabilidad reducida".
-- Evaluar el modelo **solo sobre candidatos en etapas avanzadas** para obtener métricas significativas.
+**Impacto:** Las probabilidades medias son bajas porque en etapas iniciales hay menos información disponible. Es el comportamiento esperado del modelo.
+
+**Acción:** Comunicar a los usuarios que en etapas tempranas las predicciones son orientativas. Considerar mostrar en dashboards una banda de confianza o un indicador de etapa.
 
 ---
 
 ### P2 — IMPORTANTE: Segmento Máster muy pequeño (2% del total)
 
-**Observado:**
-`PMAT_PREDICTION` tiene 50,171 registros de grado vs. 998 de máster. `DATASET_LIMPIO` refleja la misma proporción.
+**Observado:** `PMAT_PREDICTION` tiene 998 registros de Máster vs. 50,171 de Grado.
 
-**Por qué es un problema:**
-Con menos de 1,000 candidatos de máster, el modelo máster no tiene suficiente muestra para ser evaluado robustamente. Cualquier métrica calculada sobre esta muestra tendrá alta varianza.
+**Diagnóstico:** Verificar si la ingesta de SF está capturando todos los programas de Máster. Si la muestra es correcta, el modelo Máster opera con poca estadística y sus métricas agregadas tienen alta varianza.
 
-**Acción requerida:**
-- Verificar si la ingesta de Salesforce está capturando todos los programas de máster.
-- Si la muestra es correcta: documentar la limitación y no tomar decisiones estratégicas basándose solo en las métricas del modelo máster en este período.
+**Acción:** Confirmar con admisiones si 998 candidatos es el volumen esperado para Máster en esta fecha del proceso.
 
 ---
 
-### P3 — MENOR: PORCENTAJE_PAGADO_FINAL llega con 72.9% de nulos
+### P3 — ACLARADO: Mapeo etapa→ordinal se recalcula en cada ejecución
 
-**Observado:**
-Solo 27.1% de los registros tienen valor en el porcentaje de pago realizado.
+**Diagnóstico (confirmado):** Este es el comportamiento **correcto e intencionado**. El orden ordinal se calcula a partir de los datos reales de cada ejecución, reflejando la secuencia temporal real de las etapas en el curso actual. Un mapeo fijo no capturaría variaciones en el proceso de admisión de un año a otro.
 
-**Por qué es un problema:**
-En etapas tempranas, nadie ha pagado nada aún. La imputación a `0` es lógicamente correcta en este caso — es coherente con el negocio.
-
-**Acción requerida:**
-Ninguna inmediata. Documentar que esta variable es informativa solo en etapas avanzadas (Matrícula, Pre-matrícula).
-
----
-
-### P3 — MENOR: 2 features se recalculan en cada ejecución (no se persisten)
-
-**Observado:**
-`etapa_ordinal_num` y `vinculacion_previa` no están en Oracle — se calculan en `preprocessor.py` en cada ejecución de la pipeline.
-
-**Por qué es un problema:**
-Menor: el cálculo es correcto. Pero si el conjunto de datos cambia entre ejecuciones, el orden ordinal de etapas puede variar ligeramente, introduciendo inconsistencia entre predicciones históricas.
-
-**Acción requerida:**
-Bajo prioridad. Considerar persistir el mapeo `etapa→ordinal` en Oracle o en un fichero de configuración para garantizar consistencia entre ejecuciones.
+**Acción:** Ninguna. El diseño actual es el correcto.
 
 ---
 
 ## Plan de mejora de la pipeline
 
-### Mejora 1 — Sincronización de TARGET_REAL desde Salesforce [P1]
+### Mejora 1 — Verificar e instrumentar la ingesta de actividades [P1]
 
-**Problema:** `TARGET_REAL` no se actualiza cuando un candidato formaliza matrícula.
+**Problema:** Los contadores de asistencias/solicitudes son 100% ceros. No sabemos si es porque no hay actividades aún o porque hay un bug de join silencioso en `Campaign.AcademicCourse__c`.
+
 **Solución:**
-Añadir en `fase4` (o en una nueva `fase5`) una query a Salesforce que recupere las oportunidades cerradas con éxito (Stage = "Matrícula Formalizada" o equivalente) y actualice `TARGET_REAL = 1` en `PMAT_PREDICTION`.
+Añadir en el log de `fase2` un check post-integración que distinga las dos causas:
 
 ```python
-# En predictor.py o en un módulo nuevo: actualizar_targets.py
-def actualizar_target_real(conn, sf_client):
-    """
-    Consulta SF por oportunidades cerradas y actualiza TARGET_REAL en Oracle.
-    """
-    opp_matriculadas = sf_client.query(
-        "SELECT Id FROM Opportunity WHERE StageName = 'Matricula_Formalizada__c'"
+# En cleaner.py → integrar_actividades_progresivo(), al final
+n_act_raw = len(df_actividades)
+n_con_asist = (df_final["num_asistencias_acum"] > 0).sum()
+logger.info(
+    "  Actividades brutas recibidas: %d | Candidatos con asistencias: %d",
+    n_act_raw, n_con_asist
+)
+if n_act_raw > 0 and n_con_asist == 0:
+    logger.warning(
+        "  ALERTA: ACTIVITY_HISTORY tiene %d filas pero ningún candidato "
+        "tiene asistencias acumuladas — verificar Campaign.AcademicCourse__c",
+        n_act_raw
     )
-    ids = [r['Id'] for r in opp_matriculadas['records']]
-    if ids:
-        conn.execute(
-            f"UPDATE PMATOWNER.PMAT_PREDICTION SET TARGET_REAL = 1 "
-            f"WHERE OPP_ID IN ({','.join([':'+str(i) for i in range(len(ids))])})",
-            ids
+```
+
+Esto convierte el fallo silencioso en un warning visible en los logs.
+
+**Esfuerzo:** 1 hora. **Impacto:** Diagnóstico inmediato en cada ejecución.
+
+---
+
+### Mejora 2 — Sincronización de TARGET_REAL desde Salesforce [P2]
+
+**Problema:** `TARGET_REAL` en `PMAT_PREDICTION` no se actualiza automáticamente cuando un candidato formaliza matrícula en SF.
+
+**Solución:**
+Añadir en `fase4` (o una nueva fase opcional) una actualización periódica de `TARGET_REAL` para las oportunidades cerradas ganadas:
+
+```python
+def actualizar_target_real(conn, sf_client, curso):
+    """Actualiza TARGET_REAL en PMAT_PREDICTION para matrículas confirmadas."""
+    result = sf_client.query(
+        f"SELECT Id FROM Opportunity "
+        f"WHERE PL_Curso_academico__c = '{curso}' "
+        f"AND IsWon = true"
+    )
+    ids_matriculados = [r['Id'] for r in result['records']]
+    if ids_matriculados:
+        # UPDATE en Oracle por lotes
+        conn.execute_bulk_update(
+            "PMATOWNER.PMAT_PREDICTION",
+            {"TARGET_REAL": 1},
+            where_col="OPP_ID",
+            where_values=ids_matriculados
         )
+        logger.info("TARGET_REAL actualizado para %d matrículas", len(ids_matriculados))
 ```
 
-**Esfuerzo:** 1-2 días. **Impacto:** Permite evaluación real del modelo.
+**Esfuerzo:** 1-2 días. **Impacto:** Habilita la evaluación real del modelo en cuanto empiecen las matrículas.
 
 ---
 
-### Mejora 2 — Imputación inteligente de CU_IMPORTE_TOTAL [P1]
+### Mejora 3 — Añadir FIABILIDAD_DATOS en PMAT_PREDICTION [P2]
 
-**Problema:** 98.7% de nulos imputados a `0`, cuando `0` no representa la realidad (el precio no es 0, simplemente no se conoce aún).
+**Problema:** Las predicciones de etapa temprana (con pocas features disponibles) se presentan con el mismo formato que las de etapa avanzada. El usuario no puede distinguir unas de otras.
+
 **Solución:**
-En `preprocessor.py`, cambiar la imputación de `CU_IMPORTE_TOTAL` de `fillna(0)` a `fillna(mediana por titulación)`.
+Calcular un score de disponibilidad de features clave y almacenarlo como columna adicional:
 
 ```python
-# En preprocessor.py → función imputar()
-if 'CU_IMPORTE_TOTAL' in df.columns and 'TITULACION' in df.columns:
-    mediana_por_tit = df.groupby('TITULACION')['CU_IMPORTE_TOTAL'].transform('median')
-    mediana_global = df['CU_IMPORTE_TOTAL'].median()
-    df['CU_IMPORTE_TOTAL'] = df['CU_IMPORTE_TOTAL'].fillna(mediana_por_tit).fillna(mediana_global)
-```
-
-**Esfuerzo:** 2 horas. **Impacto:** Mejora estimada de 2-5 puntos en accuracy para candidatos en etapas medias.
-
----
-
-### Mejora 3 — Flag de fiabilidad en predicciones [P1]
-
-**Problema:** Las predicciones en etapas tempranas con features vacías son poco fiables, pero se presentan con la misma confianza que las de etapas avanzadas.
-**Solución:**
-Calcular un score de fiabilidad basado en el porcentaje de features clave disponibles y añadirlo a `PMAT_PREDICTION`.
-
-```python
-# En predictor.py → función guardar_en_oracle_v2()
-FEATURES_CLAVE = [
+FEATURES_DISPONIBILIDAD = [
     'CU_IMPORTE_TOTAL', 'num_asistencias_acum', 'num_solicitudes_acum',
-    'NU_NOTA_MEDIA_ADMISION', 'PAID_PERCENT'
+    'NU_NOTA_MEDIA_ADMISION', 'PAID_PERCENT', 'NU_MEDIA_EXPEDIENTE_UNIVERSITA'
 ]
 
-def calcular_fiabilidad(row, features_clave):
-    disponibles = sum(1 for f in features_clave if f in row and row[f] != 0)
-    return round(disponibles / len(features_clave), 2)
+def calcular_fiabilidad_datos(row):
+    disponibles = sum(
+        1 for f in FEATURES_DISPONIBILIDAD
+        if f in row and pd.notna(row[f]) and row[f] != 0
+    )
+    return round(disponibles / len(FEATURES_DISPONIBILIDAD), 2)
 ```
 
-Nueva columna en `PMAT_PREDICTION`: `FIABILIDAD_DATOS` [0.0–1.0].
+Nueva columna `FIABILIDAD_DATOS` [0.0–1.0] en `PMAT_PREDICTION`. Requiere añadir la columna a la tabla Oracle y al proceso de escritura en `predictor.py`.
 
-**Esfuerzo:** 4 horas. **Impacto:** Permite filtrar predicciones por calidad de datos en los dashboards.
+**Esfuerzo:** 4-6 horas. **Impacto:** Los dashboards pueden filtrar o colorear predicciones según fiabilidad.
 
 ---
 
-### Mejora 4 — Verificación de contadores de eventos en fase1 [P1]
+### Mejora 4 — Evaluación mensual automática del modelo [P2]
 
-**Problema:** `NUM_ASISTENCIAS_ACUM` y `NUM_SOLICITUDES_ACUM` son 100% ceros.
+**Problema:** No hay monitoreo automático de la degradación del modelo.
+
 **Solución:**
-En `sf_extract_all.py`, verificar que la entidad que alimenta estos contadores (probablemente `CampaignMember` o `Task`) se está ingiriendo correctamente.
-
-```python
-# Añadir en el log de fase1 una comprobación post-ingesta:
-for col in ['NUM_ASISTENCIAS_ACUM', 'NUM_SOLICITUDES_ACUM']:
-    n_nonzero = df[col].astype(float).gt(0).sum()
-    if n_nonzero == 0:
-        logger.warning(f"ALERTA: {col} es 0 para todos los registros — revisar ingesta SF")
-```
-
-**Esfuerzo:** 1 día (incluyendo investigación de la entidad SF correcta). **Impacto:** Recupera información de comportamiento que el modelo usa como señal relevante.
-
----
-
-### Mejora 5 — Evaluación diferida del modelo [P2]
-
-**Problema:** No se puede evaluar el modelo mientras el curso no haya cerrado.
-**Solución:**
-Implementar evaluación mensual automatizada: una vez al mes, calcular métricas del modelo solo sobre los registros con `TARGET_REAL IS NOT NULL` y guardar el resultado en una tabla `PMAT_MODEL_METRICS`.
+Implementar un script de evaluación mensual que calcule métricas solo sobre registros con `TARGET_REAL IS NOT NULL` y las guarde en una tabla de histórico:
 
 ```sql
 CREATE TABLE PMATOWNER.PMAT_MODEL_METRICS (
@@ -276,51 +257,38 @@ CREATE TABLE PMATOWNER.PMAT_MODEL_METRICS (
 );
 ```
 
-**Esfuerzo:** 1 día. **Impacto:** Permite detectar degradación del modelo antes de que sea grave.
-
----
-
-### Mejora 6 — Imputación de CU_IMPORTE_TOTAL por mediana de titulación en reentrenamiento [P2]
-
-Cuando se reentrene el modelo (previsiblemente para el curso 2027/28), usar la misma estrategia de imputación por mediana de titulación para que el modelo aprenda la distribución real del precio en lugar del cero sistemático.
-
-**Esfuerzo:** 0.5 días (ajuste en el notebook de modelado). **Impacto:** Elimina sesgo de entrenamiento/inferencia en esta variable.
-
----
-
-### Mejora 7 — Persistir mapeo etapa→ordinal [P3]
-
-**Problema:** `etapa_ordinal_num` se recalcula en cada ejecución y puede variar si aparecen etapas nuevas.
-**Solución:**
-Guardar el mapeo en un fichero `models/etapa_ordinal_map.json` en el primer entrenamiento y cargarlo en la pipeline de inferencia.
-
-**Esfuerzo:** 2 horas. **Impacto:** Garantiza consistencia entre predicciones históricas.
+**Esfuerzo:** 1 día. **Impacto:** Alerta temprana de degradación del modelo para el próximo curso.
 
 ---
 
 ## Resumen de acciones por prioridad
 
-| Prioridad | Acción | Responsable | Esfuerzo |
-|-----------|--------|-------------|----------|
-| P1 | Confirmar con admisiones si hay matrículas reales 2026/27 | Mario + Responsable admisiones | 1h |
-| P1 | Implementar sincronización TARGET_REAL desde SF | Mario | 2 días |
-| P1 | Cambiar imputación CU_IMPORTE_TOTAL → mediana por titulación | Mario | 2h |
-| P1 | Añadir flag FIABILIDAD_DATOS en PMAT_PREDICTION | Mario | 4h |
-| P1 | Investigar y reparar ingesta de contadores de eventos SF | Mario | 1 día |
-| P2 | Implementar evaluación mensual automatizada del modelo | Mario | 1 día |
-| P2 | Verificar ingesta de programas máster (¿están todos?) | Mario | 0.5 días |
-| P2 | Documentar limitaciones en dashboards (etapas tempranas) | Juan/Usoa | 0.5 días |
-| P2 | Imputación beca → "pendiente" en lugar de "sin beca" | Mario | 2h |
-| P3 | Persistir mapeo etapa→ordinal en JSON | Mario | 2h |
+| Prioridad | Acción | Esfuerzo |
+|-----------|--------|----------|
+| P1 | Ejecutar verificación de ACTIVITY_HISTORY (Causa A vs. B) | 1h |
+| P1 | Añadir warning en logs cuando hay actividades pero 0 asistencias | 1h |
+| P2 | Implementar sincronización TARGET_REAL desde SF | 2 días |
+| P2 | Añadir columna FIABILIDAD_DATOS en PMAT_PREDICTION | 4-6h |
+| P2 | Verificar volumen esperado de Máster con admisiones | 0.5h |
+| P2 | Implementar evaluación mensual automática del modelo | 1 día |
+| P2 | Documentar limitaciones de predicciones en etapas tempranas | 0.5 días |
 
 ---
 
 ## Conclusión
 
-**El modelo no está roto.** Las métricas aparentemente bajas se deben a:
+**El modelo no está roto.** Los hallazgos se distribuyen en tres categorías:
 
-1. **No hay ground truth**: `TARGET_REAL = 0` para todos los registros — el curso no ha cerrado.
-2. **Datos de entrada degradados**: 4-5 features clave llegan vacías o con cero para >80% de candidatos en etapas tempranas.
-3. **Distribución temporal**: La evaluación se hace al inicio del ciclo cuando los candidatos están en etapas con poca información disponible.
+1. **Comportamiento esperado (no requiere acción):**
+   - `TARGET_REAL = 0` — las matrículas aún no han comenzado
+   - `CU_IMPORTE_TOTAL` y `CH_MATRICULA_SUJETA_BECA` nulos — el anti-leakage de `cleaner.py` funciona correctamente
+   - Mapeo etapa→ordinal recalculado — diseño correcto e intencionado
+   - Distribución de etapas sesgada a inicio — es principio de ciclo
 
-**Recomendación inmediata:** No reentrenar. Primero implementar las mejoras P1 (TARGET_REAL + imputaciones) y evaluar el modelo en 30-60 días cuando el curso haya avanzado y haya matrículas reales que comparar.
+2. **Requiere verificación urgente:**
+   - `NUM_ASISTENCIAS_ACUM` y `NUM_SOLICITUDES_ACUM` = 100% ceros — puede ser normal (no hay eventos aún) o un bug silencioso de join en `Campaign.AcademicCourse__c`. Requiere consultar Oracle directamente.
+
+3. **Mejoras recomendadas a medio plazo:**
+   - Sincronización de `TARGET_REAL` cuando se confirmen matrículas
+   - Score de fiabilidad de datos por predicción
+   - Monitoreo mensual de métricas del modelo
