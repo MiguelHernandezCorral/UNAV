@@ -6,8 +6,8 @@ Esta fase usa los modelos PyCaret preentrenados (`modelo_final_grado.pkl` y
 `modelo_final_master.pkl`) para generar predicciones de probabilidad de matrícula
 sobre el dataset limpio almacenado en Oracle (`DATASET_LIMPIO`).
 
-El resultado se almacena en la tabla Oracle `PREDICCIONES`, manteniendo un histórico
-completo de cada ejecución.
+El resultado se almacena en la tabla Oracle `PMAT_PREDICTION` mediante **UPSERT inteligente**:
+solo actualiza un registro cuando cambia la probabilidad de matrícula.
 
 ---
 
@@ -88,7 +88,7 @@ y lo conserva en `df_ids` para permitir evaluación posterior.
 ### Flujo de ejecución
 
 ```
-load_dataset_limpio()
+load_dataset_limpio()  ← DATASET_LIMPIO (Oracle)
     ↓
 preprocess(df, 'grado')   preprocess(df, 'master')
     ↓                              ↓
@@ -98,8 +98,10 @@ predict_model()            predict_model()
     ↓                              ↓
 prob_matricula_real        prob_matricula_real
 confianza_modelo           confianza_modelo
+explicacion_shap           explicacion_shap
     ↓                              ↓
-         insert_records → PREDICCIONES (Oracle)
+         upsert_records → PMAT_PREDICTION (Oracle)
+         (MERGE INTO por OPP_ID_ETAPA_COMP)
 ```
 
 ### Columnas calculadas
@@ -111,21 +113,27 @@ confianza_modelo           confianza_modelo
 
 ---
 
-## Tabla Oracle: PREDICCIONES
+## Tabla Oracle: PMAT_PREDICTION
 
 ```sql
-CREATE TABLE PREDICCIONES (
-    OPP_ID       NVARCHAR2(50),    -- ID de la oportunidad Salesforce
-    PROBABILIDAD FLOAT,            -- Probabilidad de matrícula [0, 1]
-    TARGET_PRED  NUMBER(1),        -- Predicción binaria: 0=No matrícula, 1=Matrícula
-    CONFIANZA    FLOAT,            -- Confianza del modelo [0, 1]
-    MODELO       NVARCHAR2(10),    -- 'grado' o 'master'
-    FECHA_PRED   TIMESTAMP         -- Momento de la predicción
+CREATE TABLE PMAT_PREDICTION (
+    OPP_ID_ETAPA_COMP  NVARCHAR2(200),  -- PK: OPP_ID__ETAPA__SUBETAPA
+    OPP_ID             NVARCHAR2(50),   -- ID oportunidad Salesforce
+    ETAPA              NVARCHAR2(100),  -- Etapa del proceso de admisión
+    SUBETAPA           NVARCHAR2(100),  -- Subetapa del proceso
+    TARGET_PRED        NUMBER(1),       -- Predicción: 1=matrícula, 0=no
+    TARGET_REAL        NUMBER(1),       -- Resultado real (se rellena al cierre del curso)
+    PROBABILIDAD       FLOAT,           -- Probabilidad de matrícula [0, 1]
+    CONFIANZA          FLOAT,           -- Seguridad del modelo [0, 1]
+    MODELO             NVARCHAR2(20),   -- 'grado_v1' o 'master_v1'
+    EXPLICACION        CLOB,            -- JSON con top-3 variables SHAP (impacto y dirección)
+    FECHA_PRED         TIMESTAMP,       -- Momento de la primera predicción
+    FECHA_ACTUALIZACION TIMESTAMP       -- Última actualización del registro
 )
 ```
 
-La tabla se crea automáticamente si no existe (vía `OracleConnector.create_table_if_not_exists`).
-Se usa **INSERT** (no UPSERT) para mantener historial completo por ejecución.
+La tabla se crea automáticamente si no existe. Se usa **MERGE INTO** (UPSERT) con clave
+`OPP_ID_ETAPA_COMP`. Solo se escribe en disco cuando cambia `PROBABILIDAD` — sin actualizaciones redundantes.
 
 ---
 
@@ -149,9 +157,11 @@ Esta fase corresponde a la **Fase 4** del pipeline principal:
 
 ```
 pipeline.py
-├── Fase 1 · Ingesta SF
-├── Fase 2 · Upsert Oracle
-├── Fase 3 · Limpieza → DATASET_LIMPIO
-├── Fase 4 · Predicciones ← este módulo
-└── Fase 5 · (futuro) Volcado resultados adicionales
+├── fase1 · Ingesta SF → 10 tablas Oracle (UPSERT)
+├── fase2 · Limpieza → DATASET_LIMPIO (truncate + insert)
+└── fase4 · Predicciones + SHAP → PMAT_PREDICTION (UPSERT)  ← este módulo
 ```
+
+---
+
+*Autor: Viewnext (Juan Velázquez y Mario Almendros)*

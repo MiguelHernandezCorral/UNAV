@@ -5,7 +5,6 @@
 ```
 Salesforce → Oracle (fase1)
          → DATASET_LIMPIO (fase2)
-         → Validación (validate)
          → PMAT_PREDICTION + SHAP (fase4)
 ```
 
@@ -308,11 +307,8 @@ print('Predicciones matrícula:', df['TARGET_PRED'].sum())
 | Fase | Módulo | Descripción |
 |------|--------|-------------|
 | `fase1` | `sf_extract_all.py` | Ingesta de 10 entidades Salesforce → Oracle |
-| `fase2` | `cleaner.py` | Limpieza de datos → tabla `DATASET_LIMPIO` |
-| `validate` | `validator.py` | Validación de calidad y discrepancias |
-| `fase4` | `predictor.py` | Predicciones con PyCaret → `PMAT_PREDICTION` |
-
-El módulo `validator` bloquea la ejecución si detecta errores P1 (críticos).
+| `fase2` | `cleaner.py` | Limpieza de datos → tabla `DATASET_LIMPIO` (truncate + insert) |
+| `fase4` | `predictor.py` | Predicciones con PyCaret → `PMAT_PREDICTION` (UPSERT por PK) |
 
 ---
 
@@ -375,3 +371,7 @@ python -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('racdb-
 ### Error de autenticación Salesforce
 - Verificar que el Connected App tiene `client_credentials` habilitado
 - Comprobar que `SF_CLIENT_ID` y `SF_CLIENT_SECRET` son correctos
+
+---
+
+*Autor: Viewnext (Juan Velázquez y Mario Almendros)*

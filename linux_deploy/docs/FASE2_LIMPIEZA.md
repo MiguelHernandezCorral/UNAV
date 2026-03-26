@@ -24,25 +24,25 @@ lista para modelado con PyCaret.
 | 12 | Integración de actividades acumuladas (num_asistencias_acum, num_solicitudes_acum) |
 | 13 | Detección y corrección de leakage de pago en etapas tempranas |
 | 14 | Eliminación de registros sin target válido |
-| 15 | Selección de 56 columnas finales y guardado en Oracle |
+| 15 | Selección de 55 columnas finales y guardado en Oracle |
 
 ## Ejecución
 
-- **Fecha/hora inicio:** 2026-03-19 11:31:51 UTC
-- **Fecha/hora fin:**    2026-03-19 11:32:04 UTC
-- **Duración total:**    13.4 s
-- **Modo:**              RECREAR tabla (--recreate)
+- **Fecha/hora inicio:** 2026-03-26 09:48:19 UTC
+- **Fecha/hora fin:**    2026-03-26 09:48:33 UTC
+- **Duración total:**    14.1 s
+- **Modo:**              Truncate + Insert (sin recrear estructura)
 
 ## Métricas del dataset
 
 | Métrica | Valor |
 |---------|-------|
-| Filas tras join (antes limpieza) | 53,343 |
+| Filas tras join (antes limpieza) | 53,357 |
 | Filas con target nulo eliminadas | 0 |
-| Filas finales en DATASET_LIMPIO  | 53,343 |
-| Columnas seleccionadas           | 53 |
+| Filas finales en DATASET_LIMPIO  | 53,357 |
+| Columnas seleccionadas           | 55 |
 | Target = 1 (matriculados)        | 0 |
-| Target = 0 (no matriculados)     | 53,343 |
+| Target = 0 (no matriculados)     | 53,357 |
 | Tasa conversión                  | 0.0 % |
 
 ## Comparativa: campos notebook vs Oracle
@@ -129,4 +129,8 @@ si necesita renombrado, si es derivado o si está ausente.
 - **Log completo**: `logs/cleaner.log`
 
 ---
-*Generado automáticamente el 2026-03-19 11:32 UTC*
+*Generado automáticamente el 2026-03-26 09:48 UTC*
+
+---
+
+*Autor: Viewnext (Juan Velázquez y Mario Almendros)*
