@@ -1,0 +1,3 @@
+# Forzar LF en scripts de shell para que funcionen en Linux sin conversión CRLF
+*.sh text eol=lf
+*.env text eol=lf
