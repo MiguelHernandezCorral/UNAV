@@ -246,7 +246,7 @@ CREATE TABLE PMATOWNER.PMAT_SF_SYNC_LOG (
 ```
 
 ### Condición de envío
-Solo se envía a SF si `|PROBABILIDAD_actual - PROBABILIDAD_último_envío| > 1` (equivalente a 1 punto porcentual) — evita llamadas innecesarias por fluctuaciones mínimas del modelo.
+Se envía a SF **siempre que `PROBABILIDAD` haya cambiado** respecto al último valor enviado registrado en `PMAT_SF_SYNC_LOG`, independientemente de la magnitud del cambio.
 
 ### Pendiente del cliente
 - [ ] Nombre del campo custom para CONFIANZA en Opportunity (si procede)
