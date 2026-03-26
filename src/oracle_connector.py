@@ -268,6 +268,25 @@ class OracleConnector:
         cur.close()
         logger.info("Tabla %s.%s creada.", self.schema, table_upper)
 
+    def add_column_if_not_exists(self, table_name: str, col_name: str, col_type: str) -> None:
+        """Añade una columna a una tabla existente si todavía no existe."""
+        table_upper = table_name.upper()
+        col_upper   = col_name.upper()
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM all_tab_columns "
+            "WHERE owner=:s AND table_name=:t AND column_name=:c",
+            s=self.schema.upper(), t=table_upper, c=col_upper,
+        )
+        exists = cur.fetchone()[0] > 0
+        cur.close()
+        if not exists:
+            cur = self.conn.cursor()
+            cur.execute(f'ALTER TABLE "{self.schema}"."{table_upper}" ADD ("{col_upper}" {col_type})')
+            self.conn.commit()
+            cur.close()
+            logger.info("Columna %s añadida a %s.%s.", col_upper, self.schema, table_upper)
+
     # ------------------------------------------------------------------
     # Upsert genérico via MERGE INTO
     # ------------------------------------------------------------------

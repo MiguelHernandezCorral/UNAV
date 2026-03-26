@@ -1,4 +1,4 @@
-# Fase 4 · Predicciones con Modelos Preentrenados
+# Fase 3 · Predicciones con Modelos Preentrenados
 
 ## Descripción general
 
@@ -153,13 +153,13 @@ pytest src/test_phase4_predictor.py -v
 
 ## Integración en pipeline.py
 
-Esta fase corresponde a la **Fase 4** del pipeline principal:
+Esta fase corresponde a la **Fase 3** del pipeline principal:
 
 ```
 pipeline.py
 ├── fase1 · Ingesta SF → 10 tablas Oracle (UPSERT)
 ├── fase2 · Limpieza → DATASET_LIMPIO (truncate + insert)
-└── fase4 · Predicciones + SHAP → PMAT_PREDICTION (UPSERT)  ← este módulo
+└── fase3 · Predicciones + SHAP → PMAT_PREDICTION (UPSERT)  ← este módulo
 ```
 
 ---

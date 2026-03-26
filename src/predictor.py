@@ -1,7 +1,7 @@
 """
 src/predictor.py
 ================
-Fase 4 · Predicciones de matrícula con modelos PyCaret preentrenados.
+Fase 3 · Predicciones de matrícula con modelos PyCaret preentrenados.
 
 Flujo original (run_predictions):
     1. Carga DATASET_LIMPIO desde Oracle
@@ -308,11 +308,20 @@ def construir_resultado_v2(
         else [None] * len(df_ids)
     )
 
+    fecha_inicio = (
+        pd.to_datetime(df_ids["CreatedDate"], errors="coerce")
+        .dt.strftime("%Y-%m-%dT%H:%M:%S")
+        .values
+        if "CreatedDate" in df_ids.columns
+        else [None] * len(df_ids)
+    )
+
     resultado = pd.DataFrame({
         "OPP_ID_ETAPA_COMP":  opp_id_etapa_comp.values,
         "OPP_ID":             df_ids["ID"].values,
         "ETAPA":              etapa.values,
         "SUBETAPA":           subetapa.values,
+        "FECHA_INICIO_ETAPA": fecha_inicio,
         "TARGET_REAL":        target_real,
         "TARGET_PRED":        preds["prediction_label"].astype(int).values,
         "PROBABILIDAD":       preds["prob_matricula_real"].values,
@@ -341,6 +350,10 @@ def guardar_en_oracle_v2(df_resultado: pd.DataFrame, save_hist: bool = False) ->
 
     conn = OracleConnector()
     records = df_resultado.to_dict("records")
+
+    # Migración automática: añadir FECHA_INICIO_ETAPA si la tabla ya existía sin ella
+    if conn._table_exists("PMAT_PREDICTION"):
+        conn.add_column_if_not_exists("PMAT_PREDICTION", "FECHA_INICIO_ETAPA", "TIMESTAMP")
 
     logger.info(
         f"Upsert {len(records)} registros en {PMAT_PREDICTION_TABLE} "

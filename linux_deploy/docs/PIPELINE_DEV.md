@@ -5,7 +5,7 @@
 ```
 Salesforce → Oracle (fase1)
          → DATASET_LIMPIO (fase2)
-         → PMAT_PREDICTION + SHAP (fase4)
+         → PMAT_PREDICTION + SHAP (fase3)
 ```
 
 Cada fase escribe sus resultados en Oracle y genera logs en `logs/`.
@@ -130,19 +130,19 @@ SF_API_VERSION=60.0
 bash run_pipeline.sh
 
 # Solo predicciones (asume que DATASET_LIMPIO ya existe)
-bash run_pipeline.sh --phases fase4
+bash run_pipeline.sh --phases fase3
 
 # Ingesta + limpieza (sin predicciones)
 bash run_pipeline.sh --phases fase1 fase2
 
 # Limpieza + predicciones
-bash run_pipeline.sh --phases fase2 fase4
+bash run_pipeline.sh --phases fase2 fase3
 
 # Dry-run: ejecuta sin escribir en Oracle ni Salesforce
 bash run_pipeline.sh --dry-run
 
 # Con historial completo de predicciones
-bash run_pipeline.sh --phases fase4 --save-hist
+bash run_pipeline.sh --phases fase3 --save-hist
 
 # Continúa aunque falle una fase
 bash run_pipeline.sh --no-stop-on-error
@@ -155,14 +155,14 @@ python src/cleaner.py --recreate
 ### Ejecución directa de Python (alternativa)
 ```bash
 source .venv/bin/activate
-python src/pipeline.py --phases fase4 --dry-run
+python src/pipeline.py --phases fase3 --dry-run
 ```
 
 ---
 
 ## 4. Tabla de predicciones: PMAT_PREDICTION
 
-La fase4 escribe en la tabla `PMATOWNER.PMAT_PREDICTION` con UPSERT inteligente:
+La fase3 escribe en la tabla `PMATOWNER.PMAT_PREDICTION` con UPSERT inteligente:
 solo actualiza registros cuando cambia la probabilidad.
 
 | Columna | Tipo | Descripción |
@@ -219,7 +219,7 @@ Añadir línea (ejecuta el pipeline completo a las 06:00 cada día):
 
 Para solo predicciones (por ejemplo, diario a las 07:00):
 ```cron
-0 7 * * * /home/infra/jvelazquezc/UNAV/run_pipeline.sh --phases fase4 >> /home/infra/jvelazquezc/UNAV/logs/cron_fase4.log 2>&1
+0 7 * * * /home/infra/jvelazquezc/UNAV/run_pipeline.sh --phases fase3 >> /home/infra/jvelazquezc/UNAV/logs/cron_fase3.log 2>&1
 ```
 
 ---
@@ -308,7 +308,7 @@ print('Predicciones matrícula:', df['TARGET_PRED'].sum())
 |------|--------|-------------|
 | `fase1` | `sf_extract_all.py` | Ingesta de 10 entidades Salesforce → Oracle |
 | `fase2` | `cleaner.py` | Limpieza de datos → tabla `DATASET_LIMPIO` (truncate + insert) |
-| `fase4` | `predictor.py` | Predicciones con PyCaret → `PMAT_PREDICTION` (UPSERT por PK) |
+| `fase3` | `predictor.py` | Predicciones con PyCaret → `PMAT_PREDICTION` (UPSERT por PK) |
 
 ---
 

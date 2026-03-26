@@ -9,8 +9,8 @@
 
 | ID | Mejora | Prioridad | Dependencias | Bloqueante externo |
 |---|---|---|---|---|
-| M1 | Renombrar fase4 → fase3 en código y docs | Alta | — | No |
-| M2 | Añadir `FECHA_INICIO_ETAPA` a `PMAT_PREDICTION` | Alta | M1 | No |
+| M1 | Renombrar fase4 → fase3 en código y docs ✅ COMPLETADO | Alta | — | No |
+| M2 | Añadir `FECHA_INICIO_ETAPA` a `PMAT_PREDICTION` ✅ COMPLETADO | Alta | M1 | No |
 | M3 | Vista `PMAT_PRED_ACTUAL` (última predicción por oportunidad) | Alta | M2 | No |
 | M4 | Callback a Salesforce (write-back de probabilidad y confianza) | Media | M3 | Sí — endpoint del cliente |
 
@@ -18,27 +18,16 @@
 
 ---
 
-## M1 — Renombrar fase4 → fase3
+## M1 — Renombrar fase4 → fase3 ✅ COMPLETADO
 
 ### Motivación
-Se eliminó la fase de validación (`validate`). La numeración actual salta de fase2 a fase4, lo que genera confusión. Renombrar a fase3 hace la secuencia coherente.
+Se eliminó la fase de validación (`validate`). La numeración saltaba de fase2 a fase4. Renombrar a fase3 hace la secuencia coherente: fase1 → fase2 → fase3.
 
-### Archivos afectados
-
-| Archivo | Cambio |
-|---|---|
-| `src/pipeline.py` | Clave `"fase4"` → `"fase3"` en PHASE_REGISTRY y PHASE_ORDER; todas las referencias internas |
-| `src/predictor.py` | Docstring ("Fase 4" → "Fase 3") |
-| `linux_deploy/src/pipeline.py` | Ídem (sincronizar) |
-| `linux_deploy/src/predictor.py` | Ídem (sincronizar) |
-| `docs/PIPELINE_DEV.md` | Tabla de fases, ejemplos de comandos |
-| `docs/FASE4_PREDICCIONES.md` | Renombrar a `FASE3_PREDICCIONES.md`; actualizar referencias internas |
-| `docs/PIPELINE_CLIENTE.md` | Actualizar mención de fases |
-| `linux_deploy/docs/` | Sincronizar todos los docs |
+### Archivos modificados
+`src/pipeline.py`, `src/predictor.py`, `linux_deploy/src/pipeline.py`, `linux_deploy/src/predictor.py`, `docs/FASE3_PREDICCIONES.md` (renombrado), `docs/PIPELINE_DEV.md`, `docs/PIPELINE_CLIENTE.md`
 
 ### Impacto en producción
-- Cambio de nombre de clave en pipeline.py: los scripts que llamen `--phases fase4` deberán actualizarse a `--phases fase3`
-- Si hay cron configurado en la MV con `fase4`, actualizar la línea de cron
+- Scripts o cron que usaran `--phases fase4` deben actualizarse a `--phases fase3`
 
 ---
 
