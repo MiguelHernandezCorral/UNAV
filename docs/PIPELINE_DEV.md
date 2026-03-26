@@ -105,6 +105,8 @@ SF_URL=https://unav--fulladm.sandbox.my.salesforce.com
 SF_CLIENT_ID=<consumer_key>
 SF_CLIENT_SECRET=<consumer_secret>
 SF_API_VERSION=60.0
+SF_PROB_FIELD=NU_Probabilidad_de_matricula__c
+SF_CONF_FIELD=ProbabilityConfidence__c
 ```
 
 ### MV Linux (`linux_deploy/.env`)
@@ -120,6 +122,8 @@ SF_URL=https://unav--fulladm.sandbox.my.salesforce.com
 SF_CLIENT_ID=<consumer_key>
 SF_CLIENT_SECRET=<consumer_secret>
 SF_API_VERSION=60.0
+SF_PROB_FIELD=NU_Probabilidad_de_matricula__c
+SF_CONF_FIELD=ProbabilityConfidence__c
 ```
 
 ---
@@ -209,7 +213,8 @@ Tabla de control del write-back a Salesforce. Registra cada envío (OK o ERROR).
 | Columna | Tipo | Descripción |
 |---|---|---|
 | `OPP_ID` | NVARCHAR2(50) | ID de la oportunidad |
-| `PROBABILIDAD_ENV` | FLOAT | Valor enviado a SF (0–100, entero) |
+| `PROBABILIDAD_ENV` | FLOAT | `NU_Probabilidad_de_matricula__c` enviado (0–100, entero) |
+| `CONFIANZA_ENV` | FLOAT | `ProbabilityConfidence__c` enviado (0–100, entero) |
 | `FECHA_ENVIO` | TIMESTAMP | Momento del envío |
 | `STATUS` | NVARCHAR2(10) | `OK` / `ERROR` |
 | `DETALLE` | NVARCHAR2(500) | Mensaje de error si aplica |

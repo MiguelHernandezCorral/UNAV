@@ -96,27 +96,18 @@ Si no es posible, programar el script Python via cron mensualmente.
 
 ---
 
-## 3. Campo CONFIANZA en Salesforce — pendiente confirmar
+## 3. Campo CONFIANZA en Salesforce — ✅ IMPLEMENTADO (26-mar-2026)
 
-El pipeline calcula y almacena en Oracle el campo `CONFIANZA` (seguridad del
-modelo, rango 0–100). Actualmente **no se envía a Salesforce** porque el cliente
-no ha confirmado el nombre del campo custom en el objeto Opportunity.
+Confirmado por Usoa Gómez (cliente) el 26-mar-2026. El pipeline envía ahora
+dos campos a Salesforce en cada write-back:
 
-### Acción requerida (cliente)
-Confirmar el nombre del campo en Salesforce para `CONFIANZA`, por ejemplo:
-- `NU_Confianza_Modelo__c`
-- `NU_Confidence_Score__c`
-- (otro nombre acordado)
+| Campo SF | Variable entorno | Valor |
+|---|---|---|
+| `NU_Probabilidad_de_matricula__c` | `SF_PROB_FIELD` | PROBABILIDAD (0-100, entero) |
+| `ProbabilityConfidence__c` | `SF_CONF_FIELD` | CONFIANZA (0-100, entero) |
 
-### Una vez confirmado
-1. Añadir la variable de entorno en `.env` y `linux_deploy/.env`:
-   ```
-   SF_CONF_FIELD=NU_Confianza_Modelo__c
-   ```
-2. Actualizar `src/sf_writer.py`: añadir el campo en el payload del PATCH
-   y en `PMAT_SF_SYNC_LOG` (columna `CONFIANZA_ENV`).
-3. Ejecutar `ALTER TABLE PMATOWNER.PMAT_SF_SYNC_LOG ADD (CONFIANZA_ENV FLOAT)`
-   antes de la siguiente ejecución (si la columna no existe ya).
+La columna `CONFIANZA_ENV` se ha añadido a `PMAT_SF_SYNC_LOG` automáticamente
+mediante `add_column_if_not_exists` en la primera ejecución tras la actualización.
 
 ---
 
@@ -184,7 +175,7 @@ if err:
 
 | # | Acción | Responsable | Estado |
 |---|---|---|---|
-| 1 | Confirmar nombre campo CONFIANZA en SF Opportunity | Cliente (Mario coordina) | Pendiente |
+| 1 | Confirmar nombre campo CONFIANZA en SF Opportunity | Cliente (Mario coordina) | ✅ Confirmado: `ProbabilityConfidence__c` |
 | 2 | Confirmar que Connected App tiene permisos de escritura en Opportunity | Cliente | ✅ Verificado (write-back funcionando) |
 | 3 | Solicitar a Oracle DBA crear job de purga mensual PMAT_SF_SYNC_LOG | Infraestructura | Pendiente |
 | 4 | Crear índices IDX_SF_SYNC_OPP y IDX_PRED_OPP_FECHA | Infraestructura Oracle | Pendiente |

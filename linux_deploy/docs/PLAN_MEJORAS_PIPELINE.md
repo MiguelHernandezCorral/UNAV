@@ -248,9 +248,10 @@ CREATE TABLE PMATOWNER.PMAT_SF_SYNC_LOG (
 ### Condición de envío
 Se envía a SF **siempre que `PROBABILIDAD` haya cambiado** respecto al último valor enviado registrado en `PMAT_SF_SYNC_LOG`, independientemente de la magnitud del cambio.
 
-### Pendiente del cliente
-- [ ] Nombre del campo custom para CONFIANZA en Opportunity (si procede)
-- [ ] Confirmar que el Connected App tiene permisos de escritura sobre Opportunity
+### Campos confirmados por el cliente (Usoa Gómez, 26-mar-2026)
+- [x] `NU_Probabilidad_de_matricula__c` — probabilidad de matrícula (0-100, entero)
+- [x] `ProbabilityConfidence__c` — confianza del modelo (0-100, entero)
+- [x] Connected App con permisos de escritura sobre Opportunity — verificado
 
 ---
 

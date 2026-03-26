@@ -7,11 +7,12 @@ Flujo:
     1. Lee PMAT_PRED_ACTUAL (Oracle) — última predicción por oportunidad
     2. Lee PMAT_SF_SYNC_LOG (Oracle) — último valor enviado por oportunidad
     3. Filtra oportunidades donde PROBABILIDAD ha cambiado
-    4. Envía en lotes de 200 via PATCH composite/sobjects
+    4. Envía en lotes de 100 via PATCH composite/sobjects (ambos campos custom)
     5. Registra resultado en PMAT_SF_SYNC_LOG
 
 Variables de entorno:
-    SF_PROB_FIELD   — campo custom en Opportunity (default: NU_Probabilidad_de_matricula__c)
+    SF_PROB_FIELD   — campo probabilidad en Opportunity (default: NU_Probabilidad_de_matricula__c)
+    SF_CONF_FIELD   — campo confianza en Opportunity   (default: ProbabilityConfidence__c)
     SF_URL, SF_CLIENT_ID, SF_CLIENT_SECRET, SF_API_VERSION — igual que sf_extractor
 """
 
@@ -35,8 +36,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-SF_PROB_FIELD = os.getenv("SF_PROB_FIELD", "NU_Probabilidad_de_matricula__c")
-SF_BATCH_SIZE = 100
+SF_PROB_FIELD  = os.getenv("SF_PROB_FIELD", "NU_Probabilidad_de_matricula__c")
+SF_CONF_FIELD  = os.getenv("SF_CONF_FIELD", "ProbabilityConfidence__c")
+SF_BATCH_SIZE  = 100
 SF_BATCH_SLEEP = 0.5   # segundos entre lotes para evitar rate limiting
 SYNC_LOG_TABLE = "PMAT_SF_SYNC_LOG"
 
@@ -57,14 +59,24 @@ def _get_sf_headers() -> tuple[dict, str]:
 # Lógica principal
 # ---------------------------------------------------------------------------
 
-def _cargar_pred_actual(conn) -> dict[str, float]:
-    """Carga {OPP_ID: PROBABILIDAD} desde PMAT_PRED_ACTUAL."""
+def _cargar_pred_actual(conn) -> dict[str, dict]:
+    """Carga {OPP_ID: {PROBABILIDAD, CONFIANZA}} desde PMAT_PRED_ACTUAL."""
     rows = conn.read_table("PMAT_PRED_ACTUAL")
-    return {r["OPP_ID"]: r["PROBABILIDAD"] for r in rows if r.get("OPP_ID")}
+    return {
+        r["OPP_ID"]: {
+            "PROBABILIDAD": r["PROBABILIDAD"],
+            "CONFIANZA":    r.get("CONFIANZA", 0) or 0,
+        }
+        for r in rows if r.get("OPP_ID")
+    }
 
 
 def _cargar_ultimo_envio(conn) -> dict[str, float]:
-    """Carga {OPP_ID: PROBABILIDAD_ENV} desde PMAT_SF_SYNC_LOG (último OK)."""
+    """Carga {OPP_ID: PROBABILIDAD_ENV} desde PMAT_SF_SYNC_LOG (último OK).
+
+    La condición de reenvío se basa solo en PROBABILIDAD para mantener
+    consistencia con la lógica de UPSERT de PMAT_PREDICTION.
+    """
     if not conn._table_exists(SYNC_LOG_TABLE):
         return {}
     rows = conn.read_table(SYNC_LOG_TABLE)
@@ -81,15 +93,21 @@ def _cargar_ultimo_envio(conn) -> dict[str, float]:
 
 def _enviar_lote(headers: dict, instance_url: str, api_version: str,
                  lote: list[dict]) -> list[dict]:
-    """Envía un lote de hasta 200 registros via PATCH composite/sobjects."""
+    """Envía un lote de hasta 100 registros via PATCH composite/sobjects.
+
+    Cada registro actualiza dos campos custom en Opportunity:
+        SF_PROB_FIELD (NU_Probabilidad_de_matricula__c) — entero 0-100
+        SF_CONF_FIELD (ProbabilityConfidence__c)        — entero 0-100
+    """
     endpoint = f"{instance_url}/services/data/v{api_version}/composite/sobjects"
     payload = {
         "allOrNone": False,
         "records": [
             {
                 "attributes": {"type": "Opportunity"},
-                "id": r["OPP_ID"],
+                "id":          r["OPP_ID"],
                 SF_PROB_FIELD: round(r["PROBABILIDAD"]),
+                SF_CONF_FIELD: round(r["CONFIANZA"]),
             }
             for r in lote
         ],
@@ -108,11 +126,12 @@ def _registrar_resultados(conn, lote: list[dict], resultados: list[dict],
         errores = res.get("errors", [])
         detalle = str(errores[0]) if errores else ""
         log_rows.append({
-            "OPP_ID":          rec["OPP_ID"],
+            "OPP_ID":           rec["OPP_ID"],
             "PROBABILIDAD_ENV": rec["PROBABILIDAD"],
-            "FECHA_ENVIO":     fecha,
-            "STATUS":          "OK" if ok else "ERROR",
-            "DETALLE":         detalle[:500] if detalle else "",
+            "CONFIANZA_ENV":    rec["CONFIANZA"],
+            "FECHA_ENVIO":      fecha,
+            "STATUS":           "OK" if ok else "ERROR",
+            "DETALLE":          detalle[:500] if detalle else "",
         })
     conn.insert_records(log_rows, SYNC_LOG_TABLE)
 
@@ -125,13 +144,22 @@ def run(dry_run: bool = False) -> None:
     """
     Ejecuta el write-back completo a Salesforce.
 
+    Envía PROBABILIDAD (NU_Probabilidad_de_matricula__c) y CONFIANZA
+    (ProbabilityConfidence__c) para cada oportunidad cuya PROBABILIDAD
+    haya cambiado desde el último envío registrado en PMAT_SF_SYNC_LOG.
+
     Args:
-        dry_run: Si True, calcula los cambios pero no llama a SF ni escribe en PMAT_SF_SYNC_LOG.
+        dry_run: Si True, calcula los cambios pero no llama a SF ni escribe
+                 en PMAT_SF_SYNC_LOG.
     """
     from oracle_connector import OracleConnector  # noqa: PLC0415
 
     conn = OracleConnector()
     fecha = datetime.now()
+
+    # Migración: añadir CONFIANZA_ENV si la tabla ya existía sin ella
+    if conn._table_exists(SYNC_LOG_TABLE):
+        conn.add_column_if_not_exists(SYNC_LOG_TABLE, "CONFIANZA_ENV", "FLOAT")
 
     logger.info("Cargando predicciones actuales desde PMAT_PRED_ACTUAL...")
     pred_actual = _cargar_pred_actual(conn)
@@ -143,9 +171,13 @@ def run(dry_run: bool = False) -> None:
 
     # Filtrar oportunidades con cambio en PROBABILIDAD
     a_enviar = [
-        {"OPP_ID": opp_id, "PROBABILIDAD": prob}
-        for opp_id, prob in pred_actual.items()
-        if prob != ultimo_envio.get(opp_id)
+        {
+            "OPP_ID":      opp_id,
+            "PROBABILIDAD": datos["PROBABILIDAD"],
+            "CONFIANZA":    datos["CONFIANZA"],
+        }
+        for opp_id, datos in pred_actual.items()
+        if datos["PROBABILIDAD"] != ultimo_envio.get(opp_id)
     ]
     logger.info("Oportunidades con cambio en probabilidad: %d", len(a_enviar))
 
@@ -154,7 +186,11 @@ def run(dry_run: bool = False) -> None:
         return
 
     if dry_run:
-        logger.info("[dry-run] Se enviarían %d oportunidades a SF. Sin escritura.", len(a_enviar))
+        logger.info(
+            "[dry-run] Se enviarían %d oportunidades a SF "
+            "(%s + %s). Sin escritura.",
+            len(a_enviar), SF_PROB_FIELD, SF_CONF_FIELD,
+        )
         return
 
     headers, instance_url = _get_sf_headers()
