@@ -23,6 +23,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import time
 import requests
 from dotenv import load_dotenv
 
@@ -35,7 +36,8 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 SF_PROB_FIELD = os.getenv("SF_PROB_FIELD", "NU_Probabilidad_de_matricula__c")
-SF_BATCH_SIZE = 200
+SF_BATCH_SIZE = 100
+SF_BATCH_SLEEP = 0.5   # segundos entre lotes para evitar rate limiting
 SYNC_LOG_TABLE = "PMAT_SF_SYNC_LOG"
 
 
@@ -172,6 +174,7 @@ def run(dry_run: bool = False) -> None:
             total_err += err
             logger.info("Lote enviado: %d OK, %d errores.", ok, err)
             _registrar_resultados(conn, lote, resultados, fecha)
+            time.sleep(SF_BATCH_SLEEP)
         except Exception as exc:
             logger.error("Error enviando lote %d-%d: %s", i + 1, i + len(lote), exc)
             # Registrar todo el lote como ERROR
