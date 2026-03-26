@@ -275,6 +275,16 @@ class OracleConnector:
         cur.close()
         logger.info("Tabla %s.%s creada.", self.schema, table_upper)
 
+    def create_or_replace_view(self, view_name: str, select_sql: str) -> None:
+        """Crea o reemplaza una vista Oracle con el SELECT indicado."""
+        view_upper = view_name.upper()
+        ddl = f'CREATE OR REPLACE VIEW "{self.schema}"."{view_upper}" AS {select_sql}'
+        cur = self.conn.cursor()
+        cur.execute(ddl)
+        self.conn.commit()
+        cur.close()
+        logger.info("Vista %s.%s creada/actualizada.", self.schema, view_upper)
+
     def add_column_if_not_exists(self, table_name: str, col_name: str, col_type: str) -> None:
         """Añade una columna a una tabla existente si todavía no existe."""
         table_upper = table_name.upper()

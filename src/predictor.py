@@ -365,6 +365,20 @@ def guardar_en_oracle_v2(df_resultado: pd.DataFrame, save_hist: bool = False) ->
     )
     logger.info("Upsert completado.")
 
+    # Actualizar vista con la última predicción por oportunidad
+    _PMAT_PRED_ACTUAL_SQL = f"""
+        SELECT p.OPP_ID, p.PROBABILIDAD, p.CONFIANZA,
+               p.ETAPA, p.SUBETAPA, p.FECHA_INICIO_ETAPA, p.FECHA_ACTUALIZACION
+        FROM "{conn.schema}"."PMAT_PREDICTION" p
+        WHERE p.FECHA_INICIO_ETAPA = (
+            SELECT MAX(p2.FECHA_INICIO_ETAPA)
+            FROM "{conn.schema}"."PMAT_PREDICTION" p2
+            WHERE p2.OPP_ID = p.OPP_ID
+        )
+    """
+    conn.create_or_replace_view("PMAT_PRED_ACTUAL", _PMAT_PRED_ACTUAL_SQL)
+    logger.info("Vista PMAT_PRED_ACTUAL actualizada.")
+
     if save_hist:
         logger.info(f"Insertando historial en {PMAT_PREDICTION_HIST}...")
         conn.insert_records(records, PMAT_PREDICTION_HIST)
