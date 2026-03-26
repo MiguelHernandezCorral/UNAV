@@ -20,7 +20,7 @@
 | M5 | Programación automática diaria a las 03:00 en la MV ✅ COMPLETADO | Alta | — | No |
 | M6 | Escalar PROBABILIDAD y CONFIANZA a rango 0–100 ✅ COMPLETADO | Alta | — | No |
 | M3 | Vista `PMAT_PRED_ACTUAL` (última predicción por oportunidad) ✅ COMPLETADO | Alta | M2, M6 | No |
-| M4 | Write-back a Salesforce vía PATCH composite/sobjects | Alta | M3 | No — spec recibida |
+| M4 | Write-back a Salesforce vía PATCH composite/sobjects ✅ COMPLETADO | Alta | M3 | No — spec recibida |
 
 **Orden de implementación recomendado:** M1 → M2 → M5 → M6 → M3 → M4
 

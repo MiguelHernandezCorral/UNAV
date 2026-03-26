@@ -92,9 +92,15 @@ PHASE_REGISTRY: dict[str, dict[str, Any]] = {
         "entry":  "run_predictions_v2",
         "kwargs": {"save_to_oracle": True, "return_df": False},
     },
+    "fase4": {
+        "name":   "Write-back → Salesforce (PMAT_PRED_ACTUAL)",
+        "module": "sf_writer",
+        "entry":  "run",
+        "kwargs": {},
+    },
 }
 
-PHASE_ORDER = ["fase1", "fase2", "fase3"]
+PHASE_ORDER = ["fase1", "fase2", "fase3", "fase4"]
 
 
 # ─── Ejecución de una fase ────────────────────────────────────────────────────
@@ -189,9 +195,11 @@ def run_pipeline(
         extra = {}
         if phase_name == "fase3":
             extra = {"save_hist": save_hist, "dry_run": dry_run}
+        elif phase_name == "fase4":
+            extra = {"dry_run": dry_run}
 
         try:
-            _run_phase(phase_name, dry_run=(dry_run and phase_name != "fase3"), extra_kwargs=extra)
+            _run_phase(phase_name, dry_run=(dry_run and phase_name not in ("fase3", "fase4")), extra_kwargs=extra)
             resultados[phase_name] = {
                 "status":     "ok",
                 "duration_s": round(time.monotonic() - t0, 2),
@@ -240,7 +248,7 @@ def main(args=None):
     parser.add_argument(
         "--phases", nargs="+", default=["all"],
         metavar="FASE",
-        help="Fases a ejecutar: fase1 fase2 fase3 (default: all)",
+        help="Fases a ejecutar: fase1 fase2 fase3 fase4 (default: all)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
