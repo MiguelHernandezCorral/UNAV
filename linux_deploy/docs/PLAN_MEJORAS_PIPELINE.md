@@ -18,7 +18,7 @@
 | M1 | Renombrar fase4 → fase3 en código y docs ✅ COMPLETADO | Alta | — | No |
 | M2 | Añadir `FECHA_INICIO_ETAPA` a `PMAT_PREDICTION` ✅ COMPLETADO | Alta | M1 | No |
 | M5 | Programación automática diaria a las 03:00 en la MV ✅ COMPLETADO | Alta | — | No |
-| M6 | Escalar PROBABILIDAD y CONFIANZA a rango 0–100 | Alta | — | No |
+| M6 | Escalar PROBABILIDAD y CONFIANZA a rango 0–100 ✅ COMPLETADO | Alta | — | No |
 | M3 | Vista `PMAT_PRED_ACTUAL` (última predicción por oportunidad) | Alta | M2, M6 | No |
 | M4 | Write-back a Salesforce vía PATCH composite/sobjects | Alta | M3 | No — spec recibida |
 
