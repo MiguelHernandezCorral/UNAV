@@ -308,13 +308,11 @@ def construir_resultado_v2(
         else [None] * len(df_ids)
     )
 
-    fecha_inicio = (
-        pd.to_datetime(df_ids["CreatedDate"], errors="coerce")
-        .dt.strftime("%Y-%m-%dT%H:%M:%S")
-        .values
-        if "CreatedDate" in df_ids.columns
-        else [None] * len(df_ids)
-    )
+    if "CreatedDate" in df_ids.columns:
+        _ts = pd.to_datetime(df_ids["CreatedDate"], errors="coerce")
+        fecha_inicio = [None if pd.isna(t) else t.to_pydatetime() for t in _ts]
+    else:
+        fecha_inicio = [None] * len(df_ids)
 
     resultado = pd.DataFrame({
         "OPP_ID_ETAPA_COMP":  opp_id_etapa_comp.values,
