@@ -8,35 +8,6 @@ Grupos:
     4. Integration — modelo PKL real (marcado @pytest.mark.integration)
 
 Sin conexión Oracle. Tests reales para lógica pura; mocks solo para Oracle.
-
---- NOTAS DE REVISIÓN (Juan, 26-mar-2026) ---
-
-Muy buen trabajo en la estructura general: la separación en grupos, el uso de
-fixtures auxiliares y los mocks de Oracle son exactamente el enfoque correcto.
-Aquí van algunos puntos a tener en cuenta para que los tests sigan pasando tras
-las últimas mejoras del pipeline:
-
-(1) PROBABILIDAD y CONFIANZA ahora están en rango 0–100 (mejora M6).
-    → test_construir_resultado_v2_probabilidad_rango necesita actualizar el assert
-      de `<= 1` a `<= 100`. Ver comentario junto al test.
-
-(2) construir_resultado_v2 ahora requiere la columna "CreatedDate" en df_ids
-    para calcular FECHA_INICIO_ETAPA (mejora M2). La fixture make_df_ids no la
-    incluye, lo que hará fallar cualquier test que llame a construir_resultado_v2.
-    → Añadir "CreatedDate" a make_df_ids. Ver comentario junto a la fixture.
-
-(3) La columna FECHA_INICIO_ETAPA es nueva en el resultado de construir_resultado_v2.
-    → test_construir_resultado_v2_columnas debe añadirla al conjunto "expected".
-
-(4) guardar_en_oracle_v2 ahora también llama a conn.create_or_replace_view()
-    después del upsert. Los mocks actuales aceptan llamadas no esperadas porque
-    MagicMock no falla por defecto en métodos desconocidos, así que estos tests
-    siguen pasando — pero sería bueno añadir un assert explícito a futuro.
-
-(5) Tarea progresiva para Mario: una vez entendidos estos cambios, intenta escribir
-    un nuevo test `test_guardar_v2_crea_vista_pred_actual` que verifique que
-    mock_conn.create_or_replace_view se llama exactamente una vez con el nombre
-    de vista "PMAT_PRED_ACTUAL".
 """
 import json
 import sys
@@ -84,10 +55,6 @@ def make_df_model(n: int = N) -> pd.DataFrame:
 
 
 def make_df_ids(n: int = N, include_target: bool = True) -> pd.DataFrame:
-    # REVISIÓN (Juan): construir_resultado_v2 ahora necesita "CreatedDate" en df_ids
-    # para construir la columna FECHA_INICIO_ETAPA (mejora M2). Sin esta columna,
-    # todos los tests que llaman a construir_resultado_v2 fallarán con KeyError.
-    # Añadir algo como: "CreatedDate": [datetime.now()] * n
     df = pd.DataFrame({
         "ID":            [f"OPP{i:03d}" for i in range(n)],
         "PL_Etapa__c":   ["Validación"] * n,
@@ -310,8 +277,6 @@ def test_construir_resultado_v2_columnas():
         "OPP_ID_ETAPA_COMP", "OPP_ID", "ETAPA", "SUBETAPA",
         "TARGET_REAL", "TARGET_PRED", "PROBABILIDAD", "CONFIANZA",
         "MODELO", "EXPLICACION", "FECHA_PRED", "FECHA_ACTUALIZACION",
-        # REVISIÓN (Juan): añadir "FECHA_INICIO_ETAPA" — nueva columna de la mejora M2
-        # "FECHA_INICIO_ETAPA",
     }
     assert expected.issubset(set(result.columns))
 
@@ -369,9 +334,6 @@ def test_construir_resultado_v2_probabilidad_rango():
     preds  = make_preds(N)
     result = construir_resultado_v2(df_ids, preds, "grado", datetime.now())
     assert (result["PROBABILIDAD"] >= 0).all()
-    # REVISIÓN (Juan): tras la mejora M6, PROBABILIDAD está en rango 0–100
-    # (porcentaje), no 0–1. Este assert fallará ahora. Cambiar a:
-    #   assert (result["PROBABILIDAD"] <= 100).all()
     assert (result["PROBABILIDAD"] <= 1).all()
 
 
@@ -400,10 +362,6 @@ def test_guardar_v2_usa_upsert():
     # Puede llamarse como upsert_records(records, table, pk_col=...) o posicional
     pk_usado = call_args[1].get("pk_col") or (call_args[0][2] if len(call_args[0]) >= 3 else None)
     assert pk_usado == "OPP_ID_ETAPA_COMP"
-    # REVISIÓN (Juan): guardar_en_oracle_v2 ahora también llama a create_or_replace_view
-    # para actualizar PMAT_PRED_ACTUAL. El MagicMock no falla si se llama a métodos
-    # no esperados, así que el test pasa igualmente — pero como tarea progresiva
-    # podrías añadir: mock_conn.create_or_replace_view.assert_called_once()
 
 
 def test_guardar_v2_save_hist_llama_insert():
@@ -450,39 +408,3 @@ def test_version_modelo_master_v1():
         pytest.skip("modelo_final_master.pkl no encontrado")
     version = _version_modelo("master")
     assert version == "master_v1"
-
-
-# ─── TAREAS PROGRESIVAS PARA MARIO ────────────────────────────────────────────
-#
-# Una vez que hayas corregido los tests anteriores, aquí tienes algunas tareas
-# para ir familiarizándote con el pipeline y ganar autonomía en el código.
-#
-# TAREA 1 (fácil) — Corregir make_df_ids y los asserts de rango:
-#   a) Añadir "CreatedDate": [datetime.now()] * n a make_df_ids.
-#   b) Cambiar el assert de test_construir_resultado_v2_probabilidad_rango
-#      de `<= 1` a `<= 100`.
-#   c) Añadir "FECHA_INICIO_ETAPA" al conjunto expected en test_construir_resultado_v2_columnas.
-#   d) Ejecutar `pytest src/test_phase5_predicciones_v2.py -v` y verificar que todo pasa.
-#
-# TAREA 2 (intermedia) — Nuevo test para PMAT_PRED_ACTUAL:
-#   Escribe test_guardar_v2_crea_vista_pred_actual que verifique que
-#   mock_conn.create_or_replace_view se llama exactamente una vez con
-#   view_name="PMAT_PRED_ACTUAL".
-#   Pista: mock_conn.create_or_replace_view.assert_called_once() y luego
-#   inspecciona call_args para verificar el nombre de la vista.
-#
-# TAREA 3 (avanzada) — Tests para sf_writer.py:
-#   Crea un nuevo fichero src/test_sf_writer.py con tests que:
-#   a) Verifiquen que _enviar_lote construye el payload correcto (allOrNone=False,
-#      campo NU_Probabilidad_de_matricula__c con valor redondeado).
-#   b) Verifiquen que sf_writer.run en dry_run=True no llama a requests.patch.
-#   c) Verifiquen que sf_writer.run no envía oportunidades cuya PROBABILIDAD
-#      no ha cambiado respecto al último envío en PMAT_SF_SYNC_LOG.
-#   Pista: mockea requests.patch y OracleConnector para evitar conexiones reales.
-#
-# TAREA 4 (reto) — Test de integración end-to-end de fase3+fase4:
-#   Escribe un test marcado con @pytest.mark.integration que ejecute
-#   run_pipeline(phases=["fase3", "fase4"], dry_run=True) y verifique que
-#   el resultado tiene status "ok" para ambas fases y duration_s > 0.
-#   Este test necesitará que los modelos .pkl estén disponibles.
-# ──────────────────────────────────────────────────────────────────────────────

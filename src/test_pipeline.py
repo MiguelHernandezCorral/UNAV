@@ -2,25 +2,6 @@
 Fase B - Tests del orquestador pipeline.py
 
 Tests sin conexión Oracle ni Salesforce: usan dry_run y mocks de fase.
-
---- NOTAS DE REVISIÓN (Juan, 26-mar-2026) ---
-
-La estructura de estos tests es muy buena: el helper _mock_module es reutilizable
-y el uso de dry_run para los tests de estructura es limpio. Algunos puntos a revisar:
-
-(1) test_dry_run_fase_unica y otros tests usan phases=["fase4"] con dry_run=True.
-    Con el comportamiento actual del pipeline, fase4 (sf_writer) NO se salta aunque
-    dry_run=True: el pipeline le pasa dry_run como kwarg a sf_writer.run, que lo
-    gestiona internamente. Esto significa que el pipeline intentará importar
-    oracle_connector y conectarse a Oracle aunque dry_run=True.
-    En local (sin Oracle) estos tests pueden fallar. La opción más limpia es
-    mockear el módulo sf_writer completo para estos tests de estructura. Ver TAREA 1.
-
-(2) test_stop_on_error_para_en_primer_fallo: el comentario dice "ni fase4" pero
-    el test solo usa phases=["fase1", "fase2"], así que fase4 nunca entra.
-    Actualizar el docstring para que sea preciso y no confunda.
-
-(3) TAREA PROGRESIVA para Mario (ver al final del fichero).
 """
 import sys
 import logging
@@ -59,13 +40,6 @@ def test_dry_run_all_phases_retorna_ok():
 
 def test_dry_run_fase_unica():
     """dry_run con una sola fase devuelve solo esa fase."""
-    # REVISIÓN (Juan): con dry_run=True, fase4 (sf_writer) no se omite por completo
-    # — el pipeline le pasa dry_run=True como kwarg a sf_writer.run, que lo gestiona
-    # internamente, pero sí intenta importar el módulo y conectarse a Oracle.
-    # En CI/local sin Oracle, este test puede fallar. Una solución robusta es:
-    #   with patch("sf_writer.run") as mock_sf:
-    #       resultado = run_pipeline(phases=["fase4"], dry_run=True)
-    #   mock_sf.assert_called_once_with(dry_run=True)
     resultado = run_pipeline(phases=["fase4"], dry_run=True)
     assert "fase4" in resultado
     assert resultado["fase4"]["status"] == "ok"
@@ -84,9 +58,7 @@ def test_dry_run_fases_multiples():
 # ─── Tests: stop_on_error ────────────────────────────────────────────────────
 
 def test_stop_on_error_para_en_primer_fallo():
-    """Con stop_on_error=True, tras fallo de fase1 no se ejecuta fase2."""
-    # REVISIÓN (Juan): el docstring mencionaba "ni fase4" pero este test solo
-    # usa phases=["fase1", "fase2"], así que fase4 nunca se evaluaría de todas formas.
+    """Con stop_on_error=True, tras fallo de fase1 no se ejecutan fase2 ni fase4."""
     llamadas = []
 
     def fase1_falla(**kw):
@@ -211,30 +183,3 @@ def test_run_phase_dry_run_no_importa_modulo():
 def test_run_phase_fase_desconocida_lanza_error():
     with pytest.raises(ValueError):
         _run_phase("fase_invalida")
-
-
-# ─── TAREAS PROGRESIVAS PARA MARIO ────────────────────────────────────────────
-#
-# TAREA 1 (fácil) — Hacer test_dry_run_fase_unica robusto sin Oracle:
-#   Modificar el test para que mockee sf_writer.run antes de llamar a run_pipeline.
-#   Así el test no necesita Oracle y es más rápido.
-#   Pista: usar `with patch("sf_writer.run") as mock_sf:` dentro del test.
-#
-# TAREA 2 (intermedia) — Test de resultado de fase4:
-#   Escribe test_fase4_dry_run_llama_sf_writer_con_dry_run que verifique que
-#   cuando se ejecuta run_pipeline(phases=["fase4"], dry_run=True),
-#   sf_writer.run se llama con dry_run=True.
-#   Pista: patch "sf_writer.run" y luego inspect call_args.
-#
-# TAREA 3 (intermedia) — Test de orden completo fase1→fase4:
-#   Escribe un test que mockee los 4 módulos (sf_extract_all.run, cleaner.run,
-#   predictor.run_predictions_v2, sf_writer.run) y verifique que se ejecutan
-#   en ese orden cuando se llama a run_pipeline(phases=["all"]).
-#   Pista: usa una lista `orden_real = []` y appends en cada mock.
-#
-# TAREA 4 (reto) — Cobertura de pytest con --cov:
-#   Instala pytest-cov (`pip install pytest-cov`) y ejecuta:
-#     pytest src/ --cov=src --cov-report=term-missing -v
-#   Revisa qué funciones del pipeline no tienen cobertura y añade tests
-#   para las más importantes.
-# ──────────────────────────────────────────────────────────────────────────────
