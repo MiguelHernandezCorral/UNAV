@@ -173,6 +173,9 @@ def run(dry_run: bool = False) -> None:
             total_ok  += ok
             total_err += err
             logger.info("Lote enviado: %d OK, %d errores.", ok, err)
+            for rec, res in zip(lote, resultados):
+                if not res.get("success"):
+                    logger.warning("  ERROR OPP_ID=%s: %s", rec["OPP_ID"], res.get("errors"))
             _registrar_resultados(conn, lote, resultados, fecha)
             time.sleep(SF_BATCH_SLEEP)
         except Exception as exc:
