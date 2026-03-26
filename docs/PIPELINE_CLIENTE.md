@@ -132,8 +132,9 @@ Cada ejecución actualiza `PMAT_PREDICTION` de forma incremental: solo modifica 
 | Extracción Salesforce → Oracle | ✅ Operativo |
 | Limpieza y construcción del dataset | ✅ Operativo |
 | Predicciones + explicabilidad SHAP | ✅ Operativo |
-| Despliegue en servidor PRE | ✅ Operativo (puerto 443 habilitado) |
-| Programación automática diaria | 🔜 Pendiente configurar cron |
+| Despliegue en servidor PRE | ✅ Operativo |
+| Acceso a Salesforce desde MV (puerto 443) | ✅ Operativo |
+| Programación automática diaria a las 03:00 | ✅ Configurado vía cron |
 | Modelo de coste/beca | 🔜 Fase futura |
 | Probabilidad de captación online | 🔜 Fase futura |
 

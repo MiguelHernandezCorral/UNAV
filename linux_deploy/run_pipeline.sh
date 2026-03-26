@@ -4,7 +4,7 @@
 # =============================================================================
 # Uso:
 #   bash run_pipeline.sh                          # todas las fases
-#   bash run_pipeline.sh --phases fase4           # solo predicciones
+#   bash run_pipeline.sh --phases fase3           # solo predicciones
 #   bash run_pipeline.sh --dry-run                # sin escritura en Oracle/SF
 #   bash run_pipeline.sh --phases fase1 fase2     # ingesta + limpieza
 #   bash run_pipeline.sh --save-hist              # con historial de predicciones

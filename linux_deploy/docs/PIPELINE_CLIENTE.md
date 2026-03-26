@@ -54,7 +54,7 @@ Se aplican más de 15 transformaciones sobre los datos brutos:
 - **Control de leakage temporal**: las variables de pago o resultado académico solo se incluyen si ya existían en el momento de cada registro histórico — esto garantiza que el modelo no "hace trampa" usando información del futuro
 - Resultado: **53.357 registros × 55 columnas** listos para el modelo
 
-### Fase 3 — Predicciones con inteligencia artificial (Fase 3 en la pipeline y la docu -ya lo estoy modificando-)
+### Fase 3 — Predicciones con inteligencia artificial
 
 Se aplican dos modelos **LightGBM** (uno para Grado, otro para Máster) entrenados con datos históricos de matrículas anteriores.
 
@@ -132,8 +132,11 @@ Cada ejecución actualiza `PMAT_PREDICTION` de forma incremental: solo modifica 
 | Extracción Salesforce → Oracle | ✅ Operativo |
 | Limpieza y construcción del dataset | ✅ Operativo |
 | Predicciones + explicabilidad SHAP | ✅ Operativo |
-| Despliegue en servidor PRE | ✅ Operativo (puerto 443 habilitado) |
-| Programación automática diaria | 🔜 Pendiente configurar cron |
+| Despliegue en servidor PRE | ✅ Operativo |
+| Acceso a Salesforce desde MV (puerto 443) | ✅ Operativo |
+| Programación automática diaria a las 03:00 | ✅ Configurado vía cron |
+| Modelo de coste/beca | 🔜 Fase futura |
+| Probabilidad de captación online | 🔜 Fase futura |
 
 ---
 

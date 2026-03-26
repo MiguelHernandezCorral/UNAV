@@ -5,16 +5,23 @@
 
 ---
 
+## Estado de conectividad
+
+> ✅ **Acceso a Salesforce desbloqueado** (26-mar-2026): el puerto TCP 443 desde `hydra4-pre.unav.es` hacia `unav--fulladm.sandbox.my.salesforce.com` está operativo. El pipeline completo (fase1+fase2+fase3) puede ejecutarse desde la MV.
+
+---
+
 ## Resumen de mejoras
 
 | ID | Mejora | Prioridad | Dependencias | Bloqueante externo |
 |---|---|---|---|---|
 | M1 | Renombrar fase4 → fase3 en código y docs ✅ COMPLETADO | Alta | — | No |
 | M2 | Añadir `FECHA_INICIO_ETAPA` a `PMAT_PREDICTION` ✅ COMPLETADO | Alta | M1 | No |
+| M5 | Programación automática diaria a las 03:00 en la MV ✅ COMPLETADO | Alta | — | No |
 | M3 | Vista `PMAT_PRED_ACTUAL` (última predicción por oportunidad) | Alta | M2 | No |
 | M4 | Callback a Salesforce (write-back de probabilidad y confianza) | Media | M3 | Sí — endpoint del cliente |
 
-**Orden de implementación recomendado:** M1 → M2 → M3 → M4
+**Orden de implementación recomendado:** M1 → M2 → M5 → M3 → M4
 
 ---
 
@@ -62,6 +69,39 @@ OPP_ID_ETAPA_COMP  | OPP_ID | ETAPA | SUBETAPA | FECHA_INICIO_ETAPA | PROBABILID
 ABC__Solicitud__NA | ABC    | Sol.  | NA       | 2026-01-10 08:00   | 0.32         | ...
 ABC__Admitido__OK  | ABC    | Adm.  | OK       | 2026-02-15 09:30   | 0.67         | ...  ← más reciente
 ```
+
+---
+
+## M5 — Programación automática diaria a las 03:00 ✅ COMPLETADO
+
+### Motivación
+El pipeline debe ejecutarse sin intervención manual cada noche para que las predicciones en Oracle estén actualizadas al inicio de la jornada laboral.
+
+### Implementación
+
+Se ha creado el script `linux_deploy/setup_cron.sh` que gestiona la entrada en el crontab del usuario.
+
+**Instalar en la MV (una sola vez):**
+```bash
+cd /home/infra/jvelazquezc/UNAV
+chmod +x setup_cron.sh
+bash setup_cron.sh
+```
+
+Esto añade la línea:
+```cron
+0 3 * * * /home/infra/jvelazquezc/UNAV/run_pipeline.sh >> /home/infra/jvelazquezc/UNAV/logs/cron.log 2>&1
+```
+
+**Gestión del cron:**
+```bash
+bash setup_cron.sh --status   # ver si está activo
+bash setup_cron.sh --remove   # eliminar
+tail -f logs/cron.log         # seguir el log en tiempo real
+```
+
+### Archivos añadidos
+- `linux_deploy/setup_cron.sh` — script de instalación/gestión del cron
 
 ---
 
