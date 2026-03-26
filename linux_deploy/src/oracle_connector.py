@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import logging
+from datetime import datetime as _datetime
 import oracledb
 from dotenv import load_dotenv
 
@@ -53,6 +54,8 @@ def _infer_ora_type(values: list) -> str:
         return "FLOAT"
     if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null):
         return "FLOAT"
+    if all(isinstance(v, _datetime) for v in non_null):
+        return "TIMESTAMP"
 
     # Strings: determinar longitud máxima
     str_vals = [str(v) for v in non_null]
@@ -96,6 +99,10 @@ def _coerce_value(value, ora_type: str):
     según el DB_TYPE declarado en setinputsizes.
     """
     if value is None:
+        return None
+    if "TIMESTAMP" in ora_type or "DATE" in ora_type:
+        if isinstance(value, _datetime):
+            return value  # oracledb bindea datetime → TIMESTAMP natively
         return None
     if "NUMBER" in ora_type or "FLOAT" in ora_type:
         if isinstance(value, bool):
