@@ -18,10 +18,11 @@
 | M1 | Renombrar fase4 → fase3 en código y docs ✅ COMPLETADO | Alta | — | No |
 | M2 | Añadir `FECHA_INICIO_ETAPA` a `PMAT_PREDICTION` ✅ COMPLETADO | Alta | M1 | No |
 | M5 | Programación automática diaria a las 03:00 en la MV ✅ COMPLETADO | Alta | — | No |
-| M3 | Vista `PMAT_PRED_ACTUAL` (última predicción por oportunidad) | Alta | M2 | No |
-| M4 | Callback a Salesforce (write-back de probabilidad y confianza) | Media | M3 | Sí — endpoint del cliente |
+| M6 | Escalar PROBABILIDAD y CONFIANZA a rango 0–100 | Alta | — | No |
+| M3 | Vista `PMAT_PRED_ACTUAL` (última predicción por oportunidad) | Alta | M2, M6 | No |
+| M4 | Write-back a Salesforce vía PATCH composite/sobjects | Alta | M3 | No — spec recibida |
 
-**Orden de implementación recomendado:** M1 → M2 → M5 → M3 → M4
+**Orden de implementación recomendado:** M1 → M2 → M5 → M6 → M3 → M4
 
 ---
 
@@ -152,10 +153,63 @@ WHERE p.FECHA_INICIO_ETAPA = (
 
 ---
 
-## M4 — Callback a Salesforce (write-back)
+## M6 — Escalar PROBABILIDAD y CONFIANZA a rango 0–100
 
 ### Motivación
-Cerrar el ciclo: el pipeline no solo lee de Salesforce, sino que le devuelve las predicciones para que los equipos comerciales las vean directamente en el CRM.
+Los modelos devuelven probabilidades en rango [0, 1]. Salesforce y los equipos de negocio trabajan con porcentajes [0, 100]. Para alinear con el campo `NU_Probabilidad_de_matricula__c` de SF y facilitar la lectura directa de la tabla Oracle, se multiplica por 100 en el momento de construir el resultado.
+
+### Cambios en código
+
+**`src/predictor.py` — `construir_resultado_v2()`:**
+- `PROBABILIDAD`: `preds["prob_matricula_real"] * 100`
+- `CONFIANZA`:    `preds["confianza_modelo"] * 100`
+
+### Impacto
+
+| Tabla / Vista | Antes | Después |
+|---|---|---|
+| `PMAT_PREDICTION.PROBABILIDAD` | 0.401 | 40.1 |
+| `PMAT_PREDICTION.CONFIANZA` | 0.723 | 72.3 |
+| `PMAT_PRED_ACTUAL.PROBABILIDAD` | (heredado) | 40.1 |
+| SF `NU_Probabilidad_de_matricula__c` | — | 40 (entero redondeado) |
+
+> ⚠️ La condición de cambio en el UPSERT (`compare_cols=["PROBABILIDAD"]`) sigue funcionando igual — detecta cambios en el valor ya escalado.
+
+---
+
+## M4 — Write-back a Salesforce vía PATCH composite/sobjects
+
+### Motivación
+Cerrar el ciclo: el pipeline devuelve las predicciones a Salesforce para que los equipos comerciales las vean directamente en el CRM sin necesidad de consultar Oracle.
+
+### Spec del cliente (confirmada)
+
+**Método:** `PATCH`
+**Endpoint:** `{SF_URL}/services/data/v{SF_API_VERSION}/composite/sobjects`
+
+**Cuerpo JSON:**
+```json
+{
+  "allOrNone": false,
+  "records": [
+    {
+      "attributes": {"type": "Opportunity"},
+      "id": "0066900001j7KF0AAM",
+      "NU_Probabilidad_de_matricula__c": 99
+    },
+    {
+      "attributes": {"type": "Opportunity"},
+      "id": "006Tr00000OWP7IAP",
+      "NU_Probabilidad_de_matricula__c": 25
+    }
+  ]
+}
+```
+
+- **`allOrNone: false`** — si falla un registro, los demás se procesan igualmente.
+- **Máximo 200 registros por llamada** — el módulo divide en lotes de 200.
+- **Campo objetivo:** `NU_Probabilidad_de_matricula__c` (valor 0–100, entero).
+- **Campo de confianza:** pendiente confirmar nombre con el cliente.
 
 ### Diseño
 
@@ -163,45 +217,40 @@ Cerrar el ciclo: el pipeline no solo lee de Salesforce, sino que le devuelve las
 
 **Nuevo módulo: `src/sf_writer.py`**
 
-Flujo:
 ```
 PMAT_PRED_ACTUAL (Oracle)
         │
-        │  Lee oportunidades con probabilidad cambiada
-        │  (FECHA_ACTUALIZACION > última ejecución exitosa)
+        │  Filtra oportunidades donde PROBABILIDAD cambió
+        │  respecto al último envío registrado en PMAT_SF_SYNC_LOG
         ▼
 sf_writer.py
-        │  Para cada oportunidad: PATCH /sobjects/Opportunity/{id}
-        │  Campos: {campo_prob}, {campo_confianza}
+        │  Lotes de 200 registros → PATCH composite/sobjects
+        │  Reutiliza OAuth token de sf_extractor.py
         ▼
-Salesforce API (endpoint a definir por el cliente)
+Salesforce: actualiza NU_Probabilidad_de_matricula__c
         │
         ▼
-Log de resultados + registro de última sincronización
+PMAT_SF_SYNC_LOG (Oracle) — registra resultado por oportunidad
 ```
 
-**Nueva tabla de control: `PMAT_SF_SYNC_LOG`**
+**Tabla de control: `PMAT_SF_SYNC_LOG`**
 ```sql
 CREATE TABLE PMATOWNER.PMAT_SF_SYNC_LOG (
-    OPP_ID          NVARCHAR2(50),
-    PROBABILIDAD_ENV FLOAT,
-    CONFIANZA_ENV   FLOAT,
-    FECHA_ENVIO     TIMESTAMP,
-    STATUS          NVARCHAR2(10),   -- 'OK' / 'ERROR'
-    DETALLE         NVARCHAR2(500)   -- mensaje de error si aplica
+    OPP_ID           NVARCHAR2(50),
+    PROBABILIDAD_ENV  FLOAT,          -- valor enviado (0-100)
+    CONFIANZA_ENV     FLOAT,          -- valor enviado (0-100)
+    FECHA_ENVIO       TIMESTAMP,
+    STATUS            NVARCHAR2(10),  -- 'OK' / 'ERROR'
+    DETALLE           NVARCHAR2(500)  -- mensaje de error si aplica
 );
 ```
 
+### Condición de envío
+Solo se envía a SF si `|PROBABILIDAD_actual - PROBABILIDAD_último_envío| > 1` (equivalente a 1 punto porcentual) — evita llamadas innecesarias por fluctuaciones mínimas del modelo.
+
 ### Pendiente del cliente
-
-Para implementar M4 se necesita que el cliente proporcione:
-
-- [ ] Nombre de los **campos custom en Opportunity** donde escribir (`PMAT_Probabilidad__c`, `PMAT_Confianza__c` o similar)
-- [ ] Si el Connected App ya tiene permisos de **escritura** sobre Opportunity, o hay que ampliarlos
-- [ ] Confirmación de si queremos escribir cuando **cualquier campo cambia** o solo cuando `PROBABILIDAD` supera un umbral de variación (p.ej. ±0,05)
-
-### Condición de envío recomendada
-Solo se llama a SF si `|PROBABILIDAD_actual - PROBABILIDAD_env_anterior| > 0.01` — evita llamadas innecesarias por pequeñas fluctuaciones del modelo.
+- [ ] Nombre del campo custom para CONFIANZA en Opportunity (si procede)
+- [ ] Confirmar que el Connected App tiene permisos de escritura sobre Opportunity
 
 ---
 
