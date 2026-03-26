@@ -229,6 +229,22 @@ class OracleConnector:
             cur.close()
             logger.info("Tabla %s.%s eliminada (recreación).", self.schema, table_upper)
 
+    def truncate_table(self, table_name: str) -> int:
+        """Elimina todas las filas de la tabla (DELETE FROM) sin borrar su estructura.
+
+        Devuelve el número de filas eliminadas.
+        """
+        table_upper = table_name.upper()
+        if not self._table_exists(table_upper):
+            return 0
+        cur = self.conn.cursor()
+        cur.execute(f'DELETE FROM "{self.schema}"."{table_upper}"')
+        deleted = cur.rowcount
+        self.conn.commit()
+        cur.close()
+        logger.info("Tabla %s.%s truncada: %d filas eliminadas.", self.schema, table_upper, deleted)
+        return deleted
+
     def create_table_if_not_exists(
         self, records: list[dict], table_name: str, pk_col: str | None = None
     ) -> None:

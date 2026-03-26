@@ -6,7 +6,6 @@ Orquestador del pipeline completo UNAV.
 Ejecuta las fases del pipeline en secuencia:
     fase1    — Ingesta Salesforce → Oracle  (sf_extract_all.run)
     fase2    — Limpieza → DATASET_LIMPIO    (cleaner.run)
-    validate — Validación pre-predicciones  (validator.run_validation_phase)
     fase4    — Predicciones → PMAT_PREDICTION (predictor.run_predictions_v2)
 
 Uso directo:
@@ -87,12 +86,6 @@ PHASE_REGISTRY: dict[str, dict[str, Any]] = {
         "entry":  "run",
         "kwargs": {},
     },
-    "validate": {
-        "name":   "Validación pre-predicciones",
-        "module": "validator",
-        "entry":  "run_validation_phase",
-        "kwargs": {},
-    },
     "fase4": {
         "name":   "Predicciones → PMAT_PREDICTION",
         "module": "predictor",
@@ -101,7 +94,7 @@ PHASE_REGISTRY: dict[str, dict[str, Any]] = {
     },
 }
 
-PHASE_ORDER = ["fase1", "fase2", "validate", "fase4"]
+PHASE_ORDER = ["fase1", "fase2", "fase4"]
 
 
 # ─── Ejecución de una fase ────────────────────────────────────────────────────
@@ -247,7 +240,7 @@ def main(args=None):
     parser.add_argument(
         "--phases", nargs="+", default=["all"],
         metavar="FASE",
-        help="Fases a ejecutar: fase1 fase2 validate fase4 (default: all)",
+        help="Fases a ejecutar: fase1 fase2 fase4 (default: all)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",

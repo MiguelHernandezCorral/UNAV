@@ -1095,6 +1095,8 @@ def run(recreate: bool = False, include_historical: bool = False) -> None:
         # Guardar en Oracle
         if recreate:
             ora.drop_table_if_exists("DATASET_LIMPIO")
+        else:
+            ora.truncate_table("DATASET_LIMPIO")
 
         metrics_ora = ora.insert_records(records, "DATASET_LIMPIO")
         logger.info("  DATASET_LIMPIO → %d filas insertadas en Oracle", metrics_ora["inserted"])
