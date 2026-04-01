@@ -111,24 +111,32 @@ print("Conexión OK")
 
 Si da error `DPY-4027`, es porque el `.env` tiene el DSN sin `//`. Vuelve al Paso 2.
 
-### Celda con sys.path — CORREGIR la ruta a src/
+### Celda con sys.path — CORREGIR el orden de los imports
 
-Busca líneas tipo:
+**Este es el error más frecuente.** El `sys.path` debe ir **antes** de cualquier `import` local. Si pones el `from oracle_connector import ...` antes de añadir `src/` a la ruta, Python falla porque todavía no sabe dónde buscar.
 
+MAL (el orden que tiene el notebook):
 ```python
-sys.path.insert(0, 'src')
-sys.path.insert(0, 'UNAV/src')
+from oracle_connector import OracleConnector   # ← FALLA: src/ todavía no está en la ruta
+import sys, os
+project_root = os.path.abspath(os.path.join(os.getcwd(), '..'))
+sys.path.insert(0, os.path.join(project_root, 'src'))  # ← demasiado tarde
 ```
 
-Reemplázalas por:
-
+BIEN (orden correcto):
 ```python
 import sys, os
+from dotenv import load_dotenv
+load_dotenv()
 
-# Apunta siempre a la carpeta src/ del proyecto, sin importar desde dónde se ejecute
+# PRIMERO añadir la ruta, LUEGO importar módulos locales
 project_root = os.path.abspath(os.path.join(os.getcwd(), '..'))
 sys.path.insert(0, os.path.join(project_root, 'src'))
 print("Ruta src:", os.path.join(project_root, 'src'))
+
+import oracledb
+import pandas as pd
+from oracle_connector import OracleConnector   # ← ahora sí funciona
 ```
 
 ---
@@ -175,8 +183,8 @@ Luego **reinicia el kernel** (botón de reinicio arriba) y vuelve a ejecutar des
 ---
 
 ### Error: `ModuleNotFoundError: No module named 'oracle_connector'`
-**Causa:** La ruta de `src/` no está bien configurada
-**Solución:** Aplica la corrección del Paso 4 (sección sys.path)
+**Causa:** El `from oracle_connector import ...` aparece antes del `sys.path.insert(...)` en el código
+**Solución:** Reordena la celda: primero el bloque `sys.path`, luego los imports locales. Ver el ejemplo en el Paso 4.
 
 ---
 
