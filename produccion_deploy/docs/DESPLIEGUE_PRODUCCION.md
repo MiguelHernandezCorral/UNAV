@@ -72,8 +72,8 @@ Copia esos ficheros junto con el código para subirlos a la nueva MV.
 Usa **FileZilla** para subir los archivos:
 
 1. Conecta a la nueva MV vía SFTP.
-2. Sube la carpeta `produccion_deploy/` completa a `/home/infra/jvelazquezc/UNAV/`.
-3. Sube la carpeta `models/` a `/home/infra/jvelazquezc/UNAV/models/`.
+2. Sube la carpeta `produccion_deploy/` completa a `~/UNAV/`.
+3. Sube la carpeta `models/` a `~/UNAV/models/`.
 4. **No subas** el fichero `.env` por FileZilla — créalo directamente en la MV (ver Paso 4).
 
 ---
@@ -82,7 +82,7 @@ Usa **FileZilla** para subir los archivos:
 
 ```bash
 ssh <usuario>@<nueva-mv-pro>
-cd /home/infra/jvelazquezc/UNAV
+cd ~/UNAV
 nano .env
 ```
 
@@ -120,7 +120,7 @@ chmod 600 .env
 
 ```bash
 ssh <usuario>@<nueva-mv-pro>
-cd /home/infra/jvelazquezc/UNAV
+cd ~/UNAV
 source .venv/bin/activate
 
 python3 -m venv .venv
@@ -136,7 +136,7 @@ chmod +x run_pipeline.sh
 
 ```bash
 ssh <usuario>@<nueva-mv-pro>
-cd /home/infra/jvelazquezc/UNAV
+cd ~/UNAV
 source .venv/bin/activate
 
 python -c "
@@ -157,7 +157,7 @@ Debe imprimir `OK — 3.x.x ...` sin errores.
 
 ```bash
 ssh <usuario>@<nueva-mv-pro>
-cd /home/infra/jvelazquezc/UNAV
+cd ~/UNAV
 source .venv/bin/activate
 
 nc -zv <ora-host-pro> 1521
@@ -171,7 +171,7 @@ Debe responder `Connection to <host> 1521 port [tcp/*] succeeded!`
 
 ```bash
 ssh <usuario>@<nueva-mv-pro>
-cd /home/infra/jvelazquezc/UNAV
+cd ~/UNAV
 source .venv/bin/activate
 
 python src/pipeline.py --dry-run
@@ -202,7 +202,7 @@ Tablas que crea/usa el pipeline:
 
 ```bash
 ssh <usuario>@<nueva-mv-pro>
-cd /home/infra/jvelazquezc/UNAV
+cd ~/UNAV
 source .venv/bin/activate
 
 bash run_pipeline.sh
@@ -221,7 +221,7 @@ python check_pipeline.py
 
 ```bash
 ssh <usuario>@<nueva-mv-pro>
-cd /home/infra/jvelazquezc/UNAV
+cd ~/UNAV
 source .venv/bin/activate
 
 bash setup_cron.sh
