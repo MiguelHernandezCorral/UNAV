@@ -50,7 +50,9 @@ DB_PASS=w6IT%_)M>&
 DB_DSN=//racdb-pre.si.unav.es:1521/UNSIDPRE.UNAV
 ```
 
-> **IMPORTANTE:** El `//` al inicio del DSN es obligatorio. Sin él, Oracle no sabe que es una dirección de red y da error.
+> **IMPORTANTE — dos reglas para el `.env`:**
+> 1. El `//` al inicio del DSN es obligatorio. Sin él, Oracle no sabe que es una dirección de red y da error `DPY-4027`.
+> 2. **No pongas comentarios al final de una línea de valor** (p.ej. `DB_DSN=//host... # esto es un comentario`). `python-dotenv` los incluye como parte del valor y Oracle da error `DPY-4018`. Los comentarios solo funcionan en línea propia empezando por `#`.
 
 ---
 
@@ -150,6 +152,15 @@ Orden correcto:
 ### Error: `DPY-4027: no configuration directory`
 **Causa:** El DSN no tiene `//` al inicio
 **Solución:** En `.env` pon `DB_DSN=//racdb-pre.si.unav.es:1521/UNSIDPRE.UNAV`
+
+---
+
+### Error: `DPY-4018: cannot parse connect string`
+**Causa:** El DSN tiene un comentario en la misma línea (`DB_DSN=//host... # comentario`). `python-dotenv` incluye el comentario como parte del valor.
+**Solución:** Elimina el comentario de esa línea. Debe quedar solo:
+```
+DB_DSN=//racdb-pre.si.unav.es:1521/UNSIDPRE.UNAV
+```
 
 ---
 
