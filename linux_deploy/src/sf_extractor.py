@@ -153,7 +153,7 @@ select Id,
     LK_Colegio_M_Residencia_durante_curso__r.name,
     OwnerId
 from Opportunity
-where PL_Curso_academico__c = '2026/2027'
+where PL_Curso_academico__c IN ('2025/2026', '2026/2027')
 and RecordType.name in ('Solicitud Admisión Grado', 'Solicitud Admisión Máster', 'Solicitud Matricula Grado', 'Solicitud Matricula Máster')
 """
 
