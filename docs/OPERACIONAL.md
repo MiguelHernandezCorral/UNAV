@@ -28,7 +28,7 @@ tail -f logs/cron.log           # seguir el log en tiempo real
 
 Entrada crontab instalada:
 ```cron
-0 3 * * * /home/infra/jvelazquezc/UNAV/run_pipeline.sh >> /home/infra/jvelazquezc/UNAV/logs/cron.log 2>&1
+0 3 * * * ~/UNAV/run_pipeline.sh >> ~/UNAV/logs/cron.log 2>&1
 ```
 
 ### Ejecución puntual sin esperar al cron
