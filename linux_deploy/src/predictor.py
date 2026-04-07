@@ -1,7 +1,7 @@
 """
 src/predictor.py
 ================
-Fase 4 · Predicciones de matrícula con modelos PyCaret preentrenados.
+Fase 3 · Predicciones de matrícula con modelos PyCaret preentrenados.
 
 Flujo original (run_predictions):
     1. Carga DATASET_LIMPIO desde Oracle
@@ -308,15 +308,22 @@ def construir_resultado_v2(
         else [None] * len(df_ids)
     )
 
+    if "CreatedDate" in df_ids.columns:
+        _ts = pd.to_datetime(df_ids["CreatedDate"], errors="coerce")
+        fecha_inicio = [None if pd.isna(t) else t.to_pydatetime() for t in _ts]
+    else:
+        fecha_inicio = [None] * len(df_ids)
+
     resultado = pd.DataFrame({
         "OPP_ID_ETAPA_COMP":  opp_id_etapa_comp.values,
         "OPP_ID":             df_ids["ID"].values,
         "ETAPA":              etapa.values,
         "SUBETAPA":           subetapa.values,
+        "FECHA_INICIO_ETAPA": fecha_inicio,
         "TARGET_REAL":        target_real,
         "TARGET_PRED":        preds["prediction_label"].astype(int).values,
-        "PROBABILIDAD":       preds["prob_matricula_real"].values,
-        "CONFIANZA":          preds["confianza_modelo"].values,
+        "PROBABILIDAD":       (preds["prob_matricula_real"] * 100).round(2).values,
+        "CONFIANZA":          (preds["confianza_modelo"] * 100).round(2).values,
         "MODELO":             _version_modelo(tipo),
         "EXPLICACION":        expl,
         "FECHA_PRED":         fecha.isoformat(),
@@ -342,6 +349,10 @@ def guardar_en_oracle_v2(df_resultado: pd.DataFrame, save_hist: bool = False) ->
     conn = OracleConnector()
     records = df_resultado.to_dict("records")
 
+    # Migración automática: añadir FECHA_INICIO_ETAPA si la tabla ya existía sin ella
+    if conn._table_exists("PMAT_PREDICTION"):
+        conn.add_column_if_not_exists("PMAT_PREDICTION", "FECHA_INICIO_ETAPA", "TIMESTAMP")
+
     logger.info(
         f"Upsert {len(records)} registros en {PMAT_PREDICTION_TABLE} "
         f"(pk=OPP_ID_ETAPA_COMP)..."
@@ -353,6 +364,20 @@ def guardar_en_oracle_v2(df_resultado: pd.DataFrame, save_hist: bool = False) ->
         compare_cols=["PROBABILIDAD"],
     )
     logger.info("Upsert completado.")
+
+    # Actualizar vista con la última predicción por oportunidad
+    _PMAT_PRED_ACTUAL_SQL = f"""
+        SELECT p.OPP_ID, p.PROBABILIDAD, p.CONFIANZA,
+               p.ETAPA, p.SUBETAPA, p.FECHA_INICIO_ETAPA, p.FECHA_ACTUALIZACION
+        FROM "{conn.schema}"."PMAT_PREDICTION" p
+        WHERE p.FECHA_INICIO_ETAPA = (
+            SELECT MAX(p2.FECHA_INICIO_ETAPA)
+            FROM "{conn.schema}"."PMAT_PREDICTION" p2
+            WHERE p2.OPP_ID = p.OPP_ID
+        )
+    """
+    conn.create_or_replace_view("PMAT_PRED_ACTUAL", _PMAT_PRED_ACTUAL_SQL)
+    logger.info("Vista PMAT_PRED_ACTUAL actualizada.")
 
     if save_hist:
         logger.info(f"Insertando historial en {PMAT_PREDICTION_HIST}...")

@@ -6,15 +6,14 @@ Orquestador del pipeline completo UNAV.
 Ejecuta las fases del pipeline en secuencia:
     fase1    — Ingesta Salesforce → Oracle  (sf_extract_all.run)
     fase2    — Limpieza → DATASET_LIMPIO    (cleaner.run)
-    validate — Validación pre-predicciones  (validator.run_validation_phase)
-    fase4    — Predicciones → PMAT_PREDICTION (predictor.run_predictions_v2)
+    fase3    — Predicciones → PMAT_PREDICTION (predictor.run_predictions_v2)
 
 Uso directo:
     python src/pipeline.py                         # todas las fases
-    python src/pipeline.py --phases fase2 fase4    # fases concretas
+    python src/pipeline.py --phases fase2 fase3    # fases concretas
     python src/pipeline.py --dry-run               # sin escribir en Oracle/SF
     python src/pipeline.py --no-stop-on-error      # continúa aunque falle una fase
-    python src/pipeline.py --phases fase4 --save-hist  # guarda historial de predicciones
+    python src/pipeline.py --phases fase3 --save-hist  # guarda historial de predicciones
 
 Desde bash (Linux/Mac):
     bash run_pipeline.sh [opciones]
@@ -87,21 +86,21 @@ PHASE_REGISTRY: dict[str, dict[str, Any]] = {
         "entry":  "run",
         "kwargs": {},
     },
-    "validate": {
-        "name":   "Validación pre-predicciones",
-        "module": "validator",
-        "entry":  "run_validation_phase",
-        "kwargs": {},
-    },
-    "fase4": {
+    "fase3": {
         "name":   "Predicciones → PMAT_PREDICTION",
         "module": "predictor",
         "entry":  "run_predictions_v2",
         "kwargs": {"save_to_oracle": True, "return_df": False},
     },
+    "fase4": {
+        "name":   "Write-back → Salesforce (PMAT_PRED_ACTUAL)",
+        "module": "sf_writer",
+        "entry":  "run",
+        "kwargs": {},
+    },
 }
 
-PHASE_ORDER = ["fase1", "fase2", "validate", "fase4"]
+PHASE_ORDER = ["fase1", "fase2", "fase3", "fase4"]
 
 
 # ─── Ejecución de una fase ────────────────────────────────────────────────────
@@ -163,7 +162,7 @@ def run_pipeline(
         phases:        Lista de fases a ejecutar, o None / ['all'] para todas.
         dry_run:       Si True, no escribe datos en Oracle ni Salesforce.
         stop_on_error: Si True, para en el primer fallo.
-        save_hist:     Si True, guarda también en PMAT_PREDICTION_HIST (solo fase4).
+        save_hist:     Si True, guarda también en PMAT_PREDICTION_HIST (solo fase3).
 
     Returns:
         dict {phase_name: {status: 'ok'|'error', duration_s: float, error?: str}}
@@ -194,11 +193,13 @@ def run_pipeline(
     for phase_name in fases_a_ejecutar:
         t0 = time.monotonic()
         extra = {}
-        if phase_name == "fase4":
+        if phase_name == "fase3":
             extra = {"save_hist": save_hist, "dry_run": dry_run}
+        elif phase_name == "fase4":
+            extra = {"dry_run": dry_run}
 
         try:
-            _run_phase(phase_name, dry_run=(dry_run and phase_name != "fase4"), extra_kwargs=extra)
+            _run_phase(phase_name, dry_run=(dry_run and phase_name not in ("fase3", "fase4")), extra_kwargs=extra)
             resultados[phase_name] = {
                 "status":     "ok",
                 "duration_s": round(time.monotonic() - t0, 2),
@@ -247,7 +248,7 @@ def main(args=None):
     parser.add_argument(
         "--phases", nargs="+", default=["all"],
         metavar="FASE",
-        help="Fases a ejecutar: fase1 fase2 validate fase4 (default: all)",
+        help="Fases a ejecutar: fase1 fase2 fase3 fase4 (default: all)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -259,7 +260,7 @@ def main(args=None):
     )
     parser.add_argument(
         "--save-hist", action="store_true",
-        help="Guarda también en PMAT_PREDICTION_HIST (solo afecta a fase4)",
+        help="Guarda también en PMAT_PREDICTION_HIST (solo afecta a fase3)",
     )
 
     parsed = parser.parse_args(args)

@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import logging
+from datetime import datetime as _datetime
 import oracledb
 from dotenv import load_dotenv
 
@@ -53,6 +54,8 @@ def _infer_ora_type(values: list) -> str:
         return "FLOAT"
     if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in non_null):
         return "FLOAT"
+    if all(isinstance(v, _datetime) for v in non_null):
+        return "TIMESTAMP"
 
     # Strings: determinar longitud máxima
     str_vals = [str(v) for v in non_null]
@@ -96,6 +99,10 @@ def _coerce_value(value, ora_type: str):
     según el DB_TYPE declarado en setinputsizes.
     """
     if value is None:
+        return None
+    if "TIMESTAMP" in ora_type or "DATE" in ora_type:
+        if isinstance(value, _datetime):
+            return value  # oracledb bindea datetime → TIMESTAMP natively
         return None
     if "NUMBER" in ora_type or "FLOAT" in ora_type:
         if isinstance(value, bool):
@@ -229,6 +236,22 @@ class OracleConnector:
             cur.close()
             logger.info("Tabla %s.%s eliminada (recreación).", self.schema, table_upper)
 
+    def truncate_table(self, table_name: str) -> int:
+        """Elimina todas las filas de la tabla (DELETE FROM) sin borrar su estructura.
+
+        Devuelve el número de filas eliminadas.
+        """
+        table_upper = table_name.upper()
+        if not self._table_exists(table_upper):
+            return 0
+        cur = self.conn.cursor()
+        cur.execute(f'DELETE FROM "{self.schema}"."{table_upper}"')
+        deleted = cur.rowcount
+        self.conn.commit()
+        cur.close()
+        logger.info("Tabla %s.%s truncada: %d filas eliminadas.", self.schema, table_upper, deleted)
+        return deleted
+
     def create_table_if_not_exists(
         self, records: list[dict], table_name: str, pk_col: str | None = None
     ) -> None:
@@ -251,6 +274,35 @@ class OracleConnector:
         self.conn.commit()
         cur.close()
         logger.info("Tabla %s.%s creada.", self.schema, table_upper)
+
+    def create_or_replace_view(self, view_name: str, select_sql: str) -> None:
+        """Crea o reemplaza una vista Oracle con el SELECT indicado."""
+        view_upper = view_name.upper()
+        ddl = f'CREATE OR REPLACE VIEW "{self.schema}"."{view_upper}" AS {select_sql}'
+        cur = self.conn.cursor()
+        cur.execute(ddl)
+        self.conn.commit()
+        cur.close()
+        logger.info("Vista %s.%s creada/actualizada.", self.schema, view_upper)
+
+    def add_column_if_not_exists(self, table_name: str, col_name: str, col_type: str) -> None:
+        """Añade una columna a una tabla existente si todavía no existe."""
+        table_upper = table_name.upper()
+        col_upper   = col_name.upper()
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM all_tab_columns "
+            "WHERE owner=:s AND table_name=:t AND column_name=:c",
+            s=self.schema.upper(), t=table_upper, c=col_upper,
+        )
+        exists = cur.fetchone()[0] > 0
+        cur.close()
+        if not exists:
+            cur = self.conn.cursor()
+            cur.execute(f'ALTER TABLE "{self.schema}"."{table_upper}" ADD ("{col_upper}" {col_type})')
+            self.conn.commit()
+            cur.close()
+            logger.info("Columna %s añadida a %s.%s.", col_upper, self.schema, table_upper)
 
     # ------------------------------------------------------------------
     # Upsert genérico via MERGE INTO

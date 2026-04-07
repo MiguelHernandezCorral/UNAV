@@ -5,8 +5,8 @@
 ```
 Salesforce → Oracle (fase1)
          → DATASET_LIMPIO (fase2)
-         → Validación (validate)
-         → PMAT_PREDICTION + SHAP (fase4)
+         → PMAT_PREDICTION + PMAT_PRED_ACTUAL (fase3)
+         → Salesforce write-back via PMAT_SF_SYNC_LOG (fase4)
 ```
 
 Cada fase escribe sus resultados en Oracle y genera logs en `logs/`.
@@ -105,6 +105,8 @@ SF_URL=https://unav--fulladm.sandbox.my.salesforce.com
 SF_CLIENT_ID=<consumer_key>
 SF_CLIENT_SECRET=<consumer_secret>
 SF_API_VERSION=60.0
+SF_PROB_FIELD=NU_Probabilidad_de_matricula__c
+SF_CONF_FIELD=ProbabilityConfidence__c
 ```
 
 ### MV Linux (`linux_deploy/.env`)
@@ -120,6 +122,8 @@ SF_URL=https://unav--fulladm.sandbox.my.salesforce.com
 SF_CLIENT_ID=<consumer_key>
 SF_CLIENT_SECRET=<consumer_secret>
 SF_API_VERSION=60.0
+SF_PROB_FIELD=NU_Probabilidad_de_matricula__c
+SF_CONF_FIELD=ProbabilityConfidence__c
 ```
 
 ---
@@ -131,19 +135,19 @@ SF_API_VERSION=60.0
 bash run_pipeline.sh
 
 # Solo predicciones (asume que DATASET_LIMPIO ya existe)
-bash run_pipeline.sh --phases fase4
+bash run_pipeline.sh --phases fase3
 
 # Ingesta + limpieza (sin predicciones)
 bash run_pipeline.sh --phases fase1 fase2
 
 # Limpieza + predicciones
-bash run_pipeline.sh --phases fase2 fase4
+bash run_pipeline.sh --phases fase2 fase3
 
 # Dry-run: ejecuta sin escribir en Oracle ni Salesforce
 bash run_pipeline.sh --dry-run
 
 # Con historial completo de predicciones
-bash run_pipeline.sh --phases fase4 --save-hist
+bash run_pipeline.sh --phases fase3 --save-hist
 
 # Continúa aunque falle una fase
 bash run_pipeline.sh --no-stop-on-error
@@ -156,14 +160,16 @@ python src/cleaner.py --recreate
 ### Ejecución directa de Python (alternativa)
 ```bash
 source .venv/bin/activate
-python src/pipeline.py --phases fase4 --dry-run
+python src/pipeline.py --phases fase3 --dry-run
 ```
 
 ---
 
-## 4. Tabla de predicciones: PMAT_PREDICTION
+## 4. Tablas y vistas Oracle
 
-La fase4 escribe en la tabla `PMATOWNER.PMAT_PREDICTION` con UPSERT inteligente:
+### PMAT_PREDICTION
+
+La fase3 escribe en la tabla `PMATOWNER.PMAT_PREDICTION` con UPSERT inteligente:
 solo actualiza registros cuando cambia la probabilidad.
 
 | Columna | Tipo | Descripción |
@@ -171,14 +177,49 @@ solo actualiza registros cuando cambia la probabilidad.
 | `OPP_ID_ETAPA_COMP` | PK | `OPP_ID__ETAPA__SUBETAPA` |
 | `OPP_ID` | NVARCHAR2 | ID oportunidad Salesforce |
 | `ETAPA` / `SUBETAPA` | NVARCHAR2 | Etapa del proceso |
+| `FECHA_INICIO_ETAPA` | TIMESTAMP | Fecha de entrada en la etapa (de Salesforce) |
 | `TARGET_PRED` | NUMBER(1) | Predicción: 1=matrícula, 0=no |
 | `TARGET_REAL` | NUMBER(1) | Resultado real (se rellena al cierre) |
-| `PROBABILIDAD` | FLOAT | Probabilidad de matrícula [0–1] |
-| `CONFIANZA` | FLOAT | Seguridad del modelo [0–1] |
+| `PROBABILIDAD` | FLOAT | Probabilidad de matrícula **[0–100]** |
+| `CONFIANZA` | FLOAT | Seguridad del modelo **[0–100]** |
 | `MODELO` | NVARCHAR2 | Versión del modelo (`grado_v1`, etc.) |
 | `EXPLICACION` | CLOB | JSON SHAP top-3 variables |
-| `FECHA_PRED` | TIMESTAMP | Momento de la predicción |
+| `FECHA_PRED` | TIMESTAMP | Momento de la primera predicción |
 | `FECHA_ACTUALIZACION` | TIMESTAMP | Última actualización del registro |
+
+> Los valores de PROBABILIDAD y CONFIANZA están en rango 0–100 (porcentaje).
+
+### PMAT_PRED_ACTUAL (vista)
+
+Vista que expone **una fila por oportunidad** con la predicción de la etapa más reciente.
+Se recrea automáticamente al final de cada fase3.
+
+```sql
+CREATE OR REPLACE VIEW PMATOWNER.PMAT_PRED_ACTUAL AS
+SELECT p.OPP_ID, p.PROBABILIDAD, p.CONFIANZA,
+       p.ETAPA, p.SUBETAPA, p.FECHA_INICIO_ETAPA, p.FECHA_ACTUALIZACION
+FROM PMATOWNER.PMAT_PREDICTION p
+WHERE p.FECHA_INICIO_ETAPA = (
+    SELECT MAX(p2.FECHA_INICIO_ETAPA)
+    FROM PMATOWNER.PMAT_PREDICTION p2
+    WHERE p2.OPP_ID = p.OPP_ID
+);
+```
+
+### PMAT_SF_SYNC_LOG
+
+Tabla de control del write-back a Salesforce. Registra cada envío (OK o ERROR).
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `OPP_ID` | NVARCHAR2(50) | ID de la oportunidad |
+| `PROBABILIDAD_ENV` | FLOAT | `NU_Probabilidad_de_matricula__c` enviado (0–100, entero) |
+| `CONFIANZA_ENV` | FLOAT | `ProbabilityConfidence__c` enviado (0–100, entero) |
+| `FECHA_ENVIO` | TIMESTAMP | Momento del envío |
+| `STATUS` | NVARCHAR2(10) | `OK` / `ERROR` |
+| `DETALLE` | NVARCHAR2(500) | Mensaje de error si aplica |
+
+> Política de retención: purgar registros > 90 días. Ver `docs/OPERACIONAL.md`.
 
 ---
 
@@ -209,19 +250,29 @@ Definidas en `src/cleaner.py::COLS_NUNCA_ELIMINAR`.
 
 ## 6. Programación con cron
 
+El pipeline se programa automáticamente con el script `setup_cron.sh`:
+
 ```bash
-crontab -e
+# Instalar (una sola vez desde la MV)
+cd /home/infra/jvelazquezc/UNAV
+bash setup_cron.sh
+
+# Verificar estado
+bash setup_cron.sh --status
+
+# Eliminar
+bash setup_cron.sh --remove
+
+# Ver log del cron en tiempo real
+tail -f logs/cron.log
 ```
 
-Añadir línea (ejecuta el pipeline completo a las 06:00 cada día):
+El script instala la siguiente entrada en el crontab del usuario:
 ```cron
-0 6 * * * /home/infra/jvelazquezc/UNAV/run_pipeline.sh >> /home/infra/jvelazquezc/UNAV/logs/cron.log 2>&1
+0 3 * * * /home/infra/jvelazquezc/UNAV/run_pipeline.sh >> /home/infra/jvelazquezc/UNAV/logs/cron.log 2>&1
 ```
 
-Para solo predicciones (por ejemplo, diario a las 07:00):
-```cron
-0 7 * * * /home/infra/jvelazquezc/UNAV/run_pipeline.sh --phases fase4 >> /home/infra/jvelazquezc/UNAV/logs/cron_fase4.log 2>&1
-```
+Ejecuta el pipeline completo (fase1→fase2→fase3→fase4) a las **03:00** cada noche.
 
 ---
 
@@ -308,11 +359,9 @@ print('Predicciones matrícula:', df['TARGET_PRED'].sum())
 | Fase | Módulo | Descripción |
 |------|--------|-------------|
 | `fase1` | `sf_extract_all.py` | Ingesta de 10 entidades Salesforce → Oracle |
-| `fase2` | `cleaner.py` | Limpieza de datos → tabla `DATASET_LIMPIO` |
-| `validate` | `validator.py` | Validación de calidad y discrepancias |
-| `fase4` | `predictor.py` | Predicciones con PyCaret → `PMAT_PREDICTION` |
-
-El módulo `validator` bloquea la ejecución si detecta errores P1 (críticos).
+| `fase2` | `cleaner.py` | Limpieza de datos → tabla `DATASET_LIMPIO` (truncate + insert) |
+| `fase3` | `predictor.py` | Predicciones PyCaret → `PMAT_PREDICTION` (UPSERT) + vista `PMAT_PRED_ACTUAL` |
+| `fase4` | `sf_writer.py` | Write-back a Salesforce → `NU_Probabilidad_de_matricula__c` vía PATCH composite |
 
 ---
 
@@ -375,3 +424,16 @@ python -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('racdb-
 ### Error de autenticación Salesforce
 - Verificar que el Connected App tiene `client_credentials` habilitado
 - Comprobar que `SF_CLIENT_ID` y `SF_CLIENT_SECRET` son correctos
+
+### Errores en fase4 (write-back SF): algunos registros con STATUS='ERROR'
+- Son normales en tasa ~1%: se deben a reglas de validación en SF (campos obligatorios, fechas, etc.)
+- Ver el detalle en Oracle: `SELECT OPP_ID, DETALLE FROM PMATOWNER.PMAT_SF_SYNC_LOG WHERE STATUS='ERROR' ORDER BY FECHA_ENVIO DESC`
+- Si la tasa de error es alta (>5%), revisar permisos del Connected App sobre Opportunity
+
+### ORA-01843: not a valid month al insertar FECHA_INICIO_ETAPA
+- Asegurarse de que `FECHA_INICIO_ETAPA` llega a Oracle como objeto Python `datetime`, no como string
+- Verificar que `oracle_connector._infer_ora_type` devuelve `TIMESTAMP` para objetos `datetime`
+
+---
+
+*Autor: Viewnext (Juan Velázquez y Mario Almendros)*
