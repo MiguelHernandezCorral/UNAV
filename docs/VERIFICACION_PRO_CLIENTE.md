@@ -111,7 +111,7 @@ import sys; sys.path.insert(0, 'src')
 from pipeline import run_pipeline, PHASE_REGISTRY
 from oracle_connector import OracleConnector
 from predictor import run_predictions_v2
-from sf_writer import SFWriter
+from sf_writer import run as sf_run
 print('OK —', sys.version)
 "
 ```
