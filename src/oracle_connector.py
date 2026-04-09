@@ -500,7 +500,7 @@ class OracleConnector:
         """Lee una tabla Oracle completa y la devuelve como list[dict]."""
         table_upper = table_name.upper()
         cur = self.conn.cursor()
-        cur.execute(f'SELECT * FROM "{table_upper}"')
+        cur.execute(f'SELECT * FROM "{self.schema.upper()}"."{table_upper}"')
         cols = [d[0] for d in cur.description]
         rows = [dict(zip(cols, row)) for row in cur.fetchall()]
         cur.close()
