@@ -131,7 +131,7 @@ def _registrar_resultados(conn, lote: list[dict], resultados: list[dict],
             "CONFIANZA_ENV":    rec["CONFIANZA"],
             "FECHA_ENVIO":      fecha,
             "STATUS":           "OK" if ok else "ERROR",
-            "DETALLE":          detalle[:500] if detalle else "",
+            "DETALLE":          detalle[:100] if detalle else "",
         })
     conn.insert_records(log_rows, SYNC_LOG_TABLE)
 
