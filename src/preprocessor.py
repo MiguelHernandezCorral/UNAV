@@ -317,6 +317,7 @@ def preparar_features_modelo(df: pd.DataFrame, model_features: list[str]) -> pd.
         DataFrame con exactamente las columnas en model_features, en ese orden.
     """
     df = df.copy()
+    df = df.loc[:, ~df.columns.duplicated()]
     for col in model_features:
         if col not in df.columns:
             df[col] = 0.0
