@@ -1,0 +1,17 @@
+# Requirements para Python 3.9
+# Paquetes críticos: versión exacta probada con PyCaret + SHAP
+# Paquetes auxiliares: sin pin, pip elige la última compatible con Python 3.9
+
+# Core ML (versiones exactas — no cambiar)
+numpy==1.26.4
+pandas==2.1.4
+scipy==1.11.4
+scikit-learn==1.4.2
+pycaret==3.3.2
+lightgbm==4.6.0
+shap==0.49.1
+
+# Oracle, HTTP, entorno (última versión compatible con Python 3.9)
+oracledb
+requests
+python-dotenv
