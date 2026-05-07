@@ -66,6 +66,8 @@ def _infer_ora_type(values: list) -> str:
         return "NVARCHAR2(500)"
     if max_len <= 2000:
         return "NVARCHAR2(2000)"
+    if max_len <= 4000:
+        return "NVARCHAR2(4000)"
     return "CLOB"
 
 
@@ -285,6 +287,17 @@ class OracleConnector:
         cur.close()
         logger.info("Vista %s.%s creada/actualizada.", self.schema, view_upper)
 
+    def _get_oracle_columns(self, table_name: str) -> set[str]:
+        """Devuelve el conjunto de nombres de columna (en mayúsculas) de una tabla Oracle."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT column_name FROM all_tab_columns WHERE owner=:s AND table_name=:t",
+            s=self.schema.upper(), t=table_name.upper(),
+        )
+        cols = {row[0] for row in cur.fetchall()}
+        cur.close()
+        return cols
+
     def add_column_if_not_exists(self, table_name: str, col_name: str, col_type: str) -> None:
         """Añade una columna a una tabla existente si todavía no existe."""
         table_upper = table_name.upper()
@@ -348,6 +361,13 @@ class OracleConnector:
         pk_upper    = pk_col.upper()
         schema      = self._infer_schema(records)
         cols        = list(schema.keys())
+
+        # Añadir columnas nuevas que aparecen en los datos pero no en Oracle
+        oracle_cols = self._get_oracle_columns(table_upper)
+        for col, otype in schema.items():
+            if col not in oracle_cols:
+                self.add_column_if_not_exists(table_upper, col, otype)
+
         non_pk_cols = [c for c in cols if c != pk_upper]
 
         # Columnas CLOB: no se pueden comparar con != en Oracle

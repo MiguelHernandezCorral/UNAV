@@ -253,7 +253,16 @@ class SalesforceExtractor:
 
         while next_url:
             logger.info("Consultando: %s", next_url[:120] + "...")
-            resp = requests.get(next_url, headers=self._headers, timeout=60)
+            for attempt in range(4):
+                try:
+                    resp = requests.get(next_url, headers=self._headers, timeout=300)
+                    break
+                except requests.exceptions.Timeout:
+                    if attempt == 3:
+                        raise
+                    wait = 30 * (attempt + 1)
+                    logger.warning("Timeout en página, reintento %d/3 en %ds", attempt + 1, wait)
+                    import time; time.sleep(wait)
             resp.raise_for_status()
             body = resp.json()
 
