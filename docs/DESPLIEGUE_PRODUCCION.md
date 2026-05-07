@@ -282,3 +282,103 @@ Normal: en producción habrá más oportunidades que en pre. El pipeline procesa
 | Responsable técnico | Juan Velázquez | Dudas sobre el pipeline, errores técnicos |
 | Infraestructura | — | Credenciales Oracle, permisos MV, conectividad red |
 | Salesforce admin | Usoa | Credenciales SF, permisos, validaciones, campos |
+
+---
+
+## Parches aplicados — historial para PRO
+
+Esta sección recoge los cambios técnicos que hay que aplicar en PRO a medida que se validan en PRE. Cada parche indica qué archivos tocar y si hace falta recrear tablas Oracle.
+
+---
+
+### Parche 1 — Fix clasificación Grado/Máster por RECORDTYPEID
+**Fecha validación PRE:** 07/05/2026
+**Archivos modificados:**
+- `src/preprocessor.py`
+- `src/cleaner.py`
+
+**Problema:** La clasificación de oportunidades entre Grado y Máster usaba el campo `TITULACION`, que contiene "Máster" con tilde. El filtro `str.contains("MASTER")` no la reconocía y todas las oportunidades de Máster se procesaban como Grado, generando predicciones incorrectas.
+
+**Fix aplicado:** Se usa ahora `RECORDTYPEID` (IDs exactos de RecordType de Salesforce) como clasificador principal:
+- Grado: `012w0000000K4QPAA0`, `012w0000000K4QTAA0`
+- Máster: `012w0000000K4QUAA0`, `012w0000000K4QQAA0`
+
+`RECORDTYPEID` y `RECORDTYPENAME` se añadieron a `COLUMNAS_FINALES` en `cleaner.py` para que lleguen a `DATASET_LIMPIO`, y a `VARS_EXCLUIR` en `preprocessor.py` para que no entren como features del modelo.
+
+**Pasos para aplicar en PRO:**
+
+```bash
+ssh <usuario>@<mv-pro>
+cd ~/UNAV
+source .venv/bin/activate
+
+# 1. Subir los archivos actualizados por FileZilla:
+#    produccion_deploy/src/cleaner.py   → ~/UNAV/src/cleaner.py
+#    produccion_deploy/src/preprocessor.py → ~/UNAV/src/preprocessor.py
+
+# 2. Recrear DATASET_LIMPIO (schema cambia: añade columnas RECORDTYPEID y RECORDTYPENAME)
+python src/cleaner.py --recreate
+
+# 3. Relanzar fases 3 y 4
+python src/predictor.py
+
+# 4. Verificar conteos grado/máster
+python -c "
+import sys; sys.path.insert(0, 'src')
+from oracle_connector import OracleConnector
+conn = OracleConnector()
+cur = conn.conn.cursor()
+cur.execute('SELECT MODELO, COUNT(DISTINCT OPP_ID) N FROM PMAT_PREDICTION GROUP BY MODELO ORDER BY MODELO')
+for r in cur.fetchall(): print(r)
+cur.close()
+"
+# Resultado esperado (proporcional a volumen PRO):
+#   ('grado_v1', XXXX)
+#   ('master_v1', XXXX)   ← debe tener registros, no estar vacío
+```
+
+---
+
+### Parche 2 — Fix variable PAID_PERCENT (columna duplicada)
+**Fecha validación PRE:** 07/05/2026
+**Archivos modificados:**
+- `src/cleaner.py`
+
+**Problema:** `DATASET_LIMPIO` guardaba dos columnas equivalentes al porcentaje pagado:
+- `PAID_PERCENT` — campo directo de Salesforce (`PAID_PERCENT__C`), casi siempre vacío para prospectos nuevos.
+- `PORCENTAJE_PAGADO_FINAL` — valor calculado desde ECBS (precio aplicado / precio ordinario × 100), con datos reales.
+
+El preprocessor renombra `PORCENTAJE_PAGADO_FINAL` → `PAID_PERCENT` al leer Oracle. Esto creaba una columna duplicada y el pipeline se quedaba con la versión SF (vacía), que tras imputación quedaba a 0 para todos → se filtraba como constante y el modelo perdía la variable.
+
+**Fix aplicado:** Se eliminó `PAID_PERCENT` de `COLUMNAS_FINALES` en `cleaner.py`. Solo se guarda `PORCENTAJE_PAGADO_FINAL` (el calculado), que el preprocessor ya renombra correctamente.
+
+**Pasos para aplicar en PRO:**
+
+```bash
+ssh <usuario>@<mv-pro>
+cd ~/UNAV
+source .venv/bin/activate
+
+# 1. Subir el archivo actualizado por FileZilla:
+#    produccion_deploy/src/cleaner.py   → ~/UNAV/src/cleaner.py
+
+# 2. Recrear DATASET_LIMPIO (schema cambia: elimina columna PAID_PERCENT del SF)
+python src/cleaner.py --recreate
+
+# 3. Verificar que PORCENTAJE_PAGADO_FINAL tiene valores no constantes
+python -c "
+import sys; sys.path.insert(0, 'src')
+from oracle_connector import OracleConnector
+conn = OracleConnector()
+cur = conn.conn.cursor()
+cur.execute('SELECT COUNT(*) TOTAL, COUNT(PORCENTAJE_PAGADO_FINAL) CON_VALOR, ROUND(AVG(PORCENTAJE_PAGADO_FINAL),2) MEDIA FROM DATASET_LIMPIO')
+for r in cur.fetchall(): print(r)
+cur.close()
+"
+# CON_VALOR debe ser > 0 y MEDIA no debe ser exactamente 0.0
+
+# 4. Relanzar fases 3 y 4
+python src/predictor.py
+```
+
+> **Nota:** Los parches 1 y 2 se pueden aplicar juntos en un solo `--recreate` si se suben los dos archivos antes de ejecutarlo.
