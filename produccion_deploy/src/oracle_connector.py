@@ -298,6 +298,18 @@ class OracleConnector:
         cur.close()
         return cols
 
+    def _get_oracle_column_sizes(self, table_name: str) -> dict[str, int]:
+        """Devuelve {COLUMN_NAME: max_char_length} para columnas de texto de una tabla."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT column_name, char_length FROM all_tab_columns "
+            "WHERE owner=:s AND table_name=:t AND char_length > 0",
+            s=self.schema.upper(), t=table_name.upper(),
+        )
+        sizes = {row[0]: row[1] for row in cur.fetchall()}
+        cur.close()
+        return sizes
+
     def add_column_if_not_exists(self, table_name: str, col_name: str, col_type: str) -> None:
         """Añade una columna a una tabla existente si todavía no existe."""
         table_upper = table_name.upper()
@@ -422,10 +434,18 @@ class OracleConnector:
         """
 
         # Preparar filas con bind names y tipos coercionados
-        rows = [
-            {bnd[c]: _coerce_value(rec.get(c.lower()) or rec.get(c), schema[c]) for c in cols}
-            for rec in [{k.upper(): v for k, v in r.items()} for r in records]
-        ]
+        # Truncar strings que excedan el tamaño real de la columna Oracle
+        ora_sizes = self._get_oracle_column_sizes(table_upper)
+        rows = []
+        for r in records:
+            rec = {k.upper(): v for k, v in r.items()}
+            row = {}
+            for c in cols:
+                raw = rec.get(c) or rec.get(c.lower())
+                if c in ora_sizes and isinstance(raw, str) and len(raw) > ora_sizes[c]:
+                    raw = raw[:ora_sizes[c]]
+                row[bnd[c]] = _coerce_value(raw, schema[c])
+            rows.append(row)
 
         # setinputsizes: evita ambigüedad de tipo cuando el primer valor es None
         bind_sizes = {bnd[c]: _ora_type_to_db_type(ot) for c, ot in schema.items()}
