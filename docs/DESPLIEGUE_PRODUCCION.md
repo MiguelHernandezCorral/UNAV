@@ -382,3 +382,103 @@ python src/predictor.py
 ```
 
 > **Nota:** Los parches 1 y 2 se pueden aplicar juntos en un solo `--recreate` si se suben los dos archivos antes de ejecutarlo.
+
+---
+
+### Parche 3 — Extracción y predicciones para ambos cursos académicos
+**Fecha validación PRE:** 07/05/2026
+**Archivos modificados:**
+- `src/sf_extract_all.py`
+- `src/pipeline.py`
+- `src/predictor.py`
+- `src/cleaner.py`
+
+**Problema:** La pipeline solo extraía y procesaba el curso 2026/2027. El curso 2025/2026 no se incluía, por lo que sus oportunidades no recibían predicciones actualizadas.
+
+**Fix aplicado:**
+- La extracción SF ahora obtiene ambos cursos (2025/2026 y 2026/2027) por defecto en cada ejecución.
+- Se añadió soporte para lanzar un curso concreto con el flag `--curso` (útil para backfill o depuración).
+- `FUENTE_DATOS` en `DATASET_LIMPIO` se asigna dinámicamente: `SF_2026_27` o `SF_2025_26` según el curso de cada oportunidad (antes era siempre `SF_2026_27`).
+- La lógica de separación grado/máster en el predictor se actualizó para incluir ambos cursos correctamente.
+
+**Pasos para aplicar en PRO:**
+
+```bash
+ssh <usuario>@<mv-pro>
+cd ~/UNAV
+source .venv/bin/activate
+
+# 1. Subir los archivos actualizados por FileZilla:
+#    produccion_deploy/src/sf_extract_all.py → ~/UNAV/src/sf_extract_all.py
+#    produccion_deploy/src/pipeline.py       → ~/UNAV/src/pipeline.py
+#    produccion_deploy/src/predictor.py      → ~/UNAV/src/predictor.py
+#    produccion_deploy/src/cleaner.py        → ~/UNAV/src/cleaner.py
+
+# 2. Relanzar la pipeline completa (extrae ambos cursos desde SF)
+python src/pipeline.py --fase1 --fase2 --fase3 --fase4
+
+# 3. Verificar predicciones por curso
+python -c "
+import sys; sys.path.insert(0, 'src')
+from oracle_connector import OracleConnector
+conn = OracleConnector()
+cur = conn.conn.cursor()
+cur.execute('''
+    SELECT FUENTE_DATOS, MODELO, COUNT(DISTINCT OPP_ID) N
+    FROM PMAT_PREDICTION
+    GROUP BY FUENTE_DATOS, MODELO
+    ORDER BY FUENTE_DATOS, MODELO
+''')
+for r in cur.fetchall(): print(r)
+cur.close()
+"
+# Resultado esperado: filas para SF_2025_26 y SF_2026_27, ambos con grado_v1 y master_v1
+```
+
+---
+
+### Parche 4 — Robustez en extracción SF y carga Oracle
+**Fecha validación PRE:** 07/05/2026
+**Archivos modificados:**
+- `src/sf_extractor.py`
+- `src/oracle_connector.py`
+
+**Problemas resueltos:**
+
+| Error | Causa | Fix |
+|---|---|---|
+| Timeout en `activity_history` | `timeout=60` insuficiente para ~35.000 registros paginados | Timeout ampliado a 300 s con 3 reintentos automáticos (backoff 30/60/90 s) |
+| `ORA-22835` en ACCOUNT | Inferidor de tipos saltaba de NVARCHAR2(2000) a CLOB para strings de 2001–4000 chars, causando conflicto de tipo al hacer bind | Añadido nivel NVARCHAR2(4000) antes de CLOB |
+| `ORA-00904` en CASES / ACTIVITY_HISTORY | Columnas del curso 2025/2026 no existían en Oracle (tablas creadas solo con datos 2026/2027) | El upsert detecta y añade automáticamente columnas nuevas antes del MERGE |
+| `ORA-12899` en ACCOUNT (y otras tablas) | Strings del curso 2025/2026 más largos que el límite de columnas creadas con 2026/2027 | Antes del MERGE se consulta `all_tab_columns` y se truncan silenciosamente los valores que superen el `char_length` real de cada columna |
+
+**Pasos para aplicar en PRO:**
+
+```bash
+ssh <usuario>@<mv-pro>
+cd ~/UNAV
+source .venv/bin/activate
+
+# 1. Subir los archivos actualizados por FileZilla:
+#    produccion_deploy/src/sf_extractor.py      → ~/UNAV/src/sf_extractor.py
+#    produccion_deploy/src/oracle_connector.py  → ~/UNAV/src/oracle_connector.py
+
+# No requiere recrear tablas Oracle.
+# El fix se aplica automáticamente en la siguiente ejecución del pipeline.
+```
+
+> **Acción DBA requerida antes de lanzar en PRO:** El tablespace que aloja las tablas del pipeline debe tener espacio suficiente para almacenar datos de dos cursos académicos. En PRE fue necesario ampliar `PMATDA00`. Confirmar con infraestructura que el tablespace de PRO tiene espacio disponible (o AUTOEXTEND activado) antes de la primera ejecución completa.
+
+---
+
+### Orden de aplicación recomendado
+
+Si se van a aplicar todos los parches a la vez (despliegue inicial), el orden es:
+
+1. Subir **todos** los archivos de `produccion_deploy/src/` de una vez.
+2. Confirmar con el DBA que el tablespace tiene espacio suficiente.
+3. Ejecutar:
+```bash
+python src/cleaner.py --recreate   # aplica parches 1, 2 y 3 en DATASET_LIMPIO
+python src/pipeline.py --fase1 --fase2 --fase3 --fase4  # ejecución completa
+```
