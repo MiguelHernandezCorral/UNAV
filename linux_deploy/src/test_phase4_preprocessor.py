@@ -80,32 +80,102 @@ def make_df_base(n_grado=5, n_master=3) -> pd.DataFrame:
     return df
 
 
+def make_df_base_con_recordtype(n_grado=5, n_master=3) -> pd.DataFrame:
+    """DataFrame con RECORDTYPEID real de Salesforce (IDs confirmados por equipo UNAV)."""
+    df = make_df_base(n_grado, n_master)
+    df["RECORDTYPEID"] = (
+        ["012w0000000K4QPAA0"] * n_grado
+        + ["012w0000000K4QUAA0"] * n_master
+    )
+    df["RECORDTYPENAME"] = (
+        ["Solicitud Admisión Grado"] * n_grado
+        + ["Solicitud Admisión Máster"] * n_master
+    )
+    return df
+
+
 # ─── Tests de split_grado_master ──────────────────────────────────────────────
 
 def test_split_grado_no_contiene_master():
-    df = make_df_base(n_grado=5, n_master=3)
+    df = make_df_base_con_recordtype(n_grado=5, n_master=3)
     result = split_grado_master(df, "grado")
-    assert not result["TITULACION"].str.contains("MASTER", case=False, na=False).any(), \
-        "El split 'grado' contiene filas con MASTER"
+    assert len(result) == 5
+    assert not result["RECORDTYPEID"].isin({"012w0000000K4QUAA0", "012w0000000K4QQAA0"}).any()
 
 
-def test_split_master_todos_contienen():
-    df = make_df_base(n_grado=5, n_master=3)
+def test_split_master_todos_correctos():
+    df = make_df_base_con_recordtype(n_grado=5, n_master=3)
     result = split_grado_master(df, "master")
-    assert result["TITULACION"].str.contains("MASTER", case=False, na=False).all(), \
-        "El split 'master' contiene filas sin MASTER"
+    assert len(result) == 3
+    assert result["RECORDTYPEID"].isin({"012w0000000K4QUAA0", "012w0000000K4QQAA0"}).all()
 
 
 def test_split_grado_conteo_correcto():
-    df = make_df_base(n_grado=5, n_master=3)
+    df = make_df_base_con_recordtype(n_grado=5, n_master=3)
     assert len(split_grado_master(df, "grado")) == 5
     assert len(split_grado_master(df, "master")) == 3
 
 
-def test_split_sin_columna_titulacion_lanza_error():
+def test_split_ambos_ids_grado():
+    """Los dos IDs de grado (K4QPAA0 y K4QTAA0) deben clasificarse como grado."""
+    df = make_df_base_con_recordtype(n_grado=0, n_master=0)
+    extra = pd.DataFrame({
+        "ID": ["A", "B"], "TITULACION": ["x", "x"],
+        "RECORDTYPEID": ["012w0000000K4QPAA0", "012w0000000K4QTAA0"],
+    })
+    df = pd.concat([df, extra], ignore_index=True).fillna(0)
+    assert len(split_grado_master(df, "grado")) == 2
+
+
+def test_split_ambos_ids_master():
+    """Los dos IDs de máster (K4QUAA0 y K4QQAA0) deben clasificarse como master."""
+    df = make_df_base_con_recordtype(n_grado=0, n_master=0)
+    extra = pd.DataFrame({
+        "ID": ["A", "B"], "TITULACION": ["x", "x"],
+        "RECORDTYPEID": ["012w0000000K4QUAA0", "012w0000000K4QQAA0"],
+    })
+    df = pd.concat([df, extra], ignore_index=True).fillna(0)
+    assert len(split_grado_master(df, "master")) == 2
+
+
+def test_split_recordtypeid_priorizado_sobre_recordtypename():
+    """RECORDTYPEID debe tener prioridad aunque RECORDTYPENAME diga otra cosa."""
+    df = make_df_base_con_recordtype(n_grado=5, n_master=3)
+    df["RECORDTYPENAME"] = "Solicitud Admisión Grado"  # todos dicen grado
+    assert len(split_grado_master(df, "master")) == 3, "RECORDTYPEID debe mandar"
+
+
+def test_split_fallback_recordtypename_sin_id():
+    """Sin RECORDTYPEID, usa RECORDTYPENAME con subcadena 'ster'."""
+    df = make_df_base(n_grado=5, n_master=3)
+    df["RECORDTYPENAME"] = (
+        ["Solicitud Admisión Grado"] * 5
+        + ["Solicitud Admisión Máster"] * 3
+    )
+    assert len(split_grado_master(df, "master")) == 3
+
+
+def test_split_fallback_titulacion_sin_id_ni_nombre():
+    """Sin RECORDTYPEID ni RECORDTYPENAME, usa TITULACION con 'MASTER'."""
+    df = make_df_base(n_grado=5, n_master=3)
+    assert len(split_grado_master(df, "master")) == 3
+
+
+def test_split_sin_ninguna_columna_clasificadora_lanza_error():
+    """Sin ninguna columna clasificadora debe lanzar ValueError."""
     df = make_df_base().drop(columns=["TITULACION"])
     with pytest.raises(ValueError, match="TITULACION"):
         split_grado_master(df, "grado")
+
+
+def test_split_master_vacio_logea_warning(caplog):
+    """Si no hay registros de máster, el segmento es vacío y se emite warning."""
+    import logging
+    df = make_df_base_con_recordtype(n_grado=5, n_master=0)
+    with caplog.at_level(logging.WARNING):
+        result = split_grado_master(df, "master")
+    assert len(result) == 0
+    assert any("vacío" in r.message for r in caplog.records)
 
 
 # ─── Tests de calcular_orden_automatico ───────────────────────────────────────

@@ -71,6 +71,8 @@ VARS_EXCLUIR = [
     # Nombres adicionales que Oracle puede tener y no se deben usar como features
     "MINIMUMPAYMENTPAYED", "CH_PAGO_SUPERIOR", "FUENTE_DATOS",
     "PAID_AMOUNT", "YEARPERSONBIRTHDATE",
+    # Clasificadores de tipo de solicitud — solo para split, nunca como feature
+    "RECORDTYPEID", "RECORDTYPENAME",
 ]
 
 VARS_CERO_LOGICO = [
@@ -133,6 +135,11 @@ def load_dataset_limpio() -> pd.DataFrame:
     return df
 
 
+# IDs de RecordType de Salesforce — fuente: equipo UNAV (Marta, abr-2026)
+_RECORDTYPE_GRADO  = {"012w0000000K4QPAA0", "012w0000000K4QTAA0"}
+_RECORDTYPE_MASTER = {"012w0000000K4QUAA0", "012w0000000K4QQAA0"}
+
+
 def split_grado_master(
     df: pd.DataFrame,
     tipo: Literal["grado", "master"],
@@ -140,24 +147,51 @@ def split_grado_master(
     """
     Filtra el dataset por tipo de titulación.
 
+    Prioridad de columna clasificadora:
+      1. RECORDTYPEID  — IDs exactos de RecordType de Salesforce (más fiable).
+      2. RECORDTYPENAME — subcadena "ster" (cubre "Master" y "Máster" con tilde).
+      3. TITULACION     — subcadena "MASTER" (fallback para datos históricos Excel).
+
     Args:
-        df:   DataFrame completo con columna TITULACION.
-        tipo: 'grado' excluye filas con 'MASTER', 'master' las incluye solo.
+        df:   DataFrame con al menos una de las columnas anteriores.
+        tipo: 'grado' o 'master'.
 
     Returns:
         DataFrame filtrado.
+
+    Raises:
+        ValueError: Si no se encuentra ninguna columna clasificadora.
     """
-    if "TITULACION" not in df.columns:
-        raise ValueError("El DataFrame no contiene la columna TITULACION")
-
-    mask_master = df["TITULACION"].str.contains("MASTER", case=False, na=False)
-
-    if tipo == "grado":
-        result = df[~mask_master].copy()
+    if "RECORDTYPEID" in df.columns:
+        ids_tipo = _RECORDTYPE_GRADO if tipo == "grado" else _RECORDTYPE_MASTER
+        result = df[df["RECORDTYPEID"].isin(ids_tipo)].copy()
+        n_master = int(df["RECORDTYPEID"].isin(_RECORDTYPE_MASTER).sum())
+        col_usada = "RECORDTYPEID"
+    elif "RECORDTYPENAME" in df.columns:
+        mask_master = df["RECORDTYPENAME"].str.contains("ster", case=False, na=False)
+        result = df[~mask_master if tipo == "grado" else mask_master].copy()
+        n_master = int(mask_master.sum())
+        col_usada = "RECORDTYPENAME"
+    elif "TITULACION" in df.columns:
+        mask_master = df["TITULACION"].str.contains("MASTER", case=False, na=False)
+        result = df[~mask_master if tipo == "grado" else mask_master].copy()
+        n_master = int(mask_master.sum())
+        col_usada = "TITULACION"
     else:
-        result = df[mask_master].copy()
+        raise ValueError(
+            "El DataFrame no contiene RECORDTYPEID, RECORDTYPENAME ni TITULACION — "
+            "no es posible separar grado de máster."
+        )
 
-    logger.info(f"Split '{tipo}': {len(result)} filas (de {len(df)} totales)")
+    logger.info(
+        "Split '%s' (col=%s): %d filas (de %d totales | máster en dataset=%d)",
+        tipo, col_usada, len(result), len(df), n_master,
+    )
+    if tipo == "master" and len(result) == 0:
+        logger.warning(
+            "Segmento 'master' vacío — revisar valores de %s en DATASET_LIMPIO.",
+            col_usada,
+        )
     return result
 
 
