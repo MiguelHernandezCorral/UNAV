@@ -402,6 +402,14 @@ ENTITIES: list[tuple[str, str, str, str]] = [
 ]
 
 
+def _curso_where(cursos: list[str]) -> str:
+    """Construye la cláusula SOQL de filtro por curso académico."""
+    if len(cursos) == 1:
+        return f"PL_Curso_academico__c = '{cursos[0]}'"
+    vals = ", ".join(f"'{c}'" for c in cursos)
+    return f"PL_Curso_academico__c IN ({vals})"
+
+
 # ---------------------------------------------------------------------------
 # Generación de documentación Markdown
 # ---------------------------------------------------------------------------
@@ -530,23 +538,34 @@ def _write_docs(
 # Ejecución principal: SF → Oracle directo
 # ---------------------------------------------------------------------------
 
-def run(recreate: bool = False) -> list[dict]:
+def run(recreate: bool = False, cursos: list[str] | None = None) -> list[dict]:
     """
     Ejecuta la ingesta completa: extrae cada entidad de Salesforce y la
     carga directamente en Oracle via upsert (MERGE INTO).
 
     Args:
         recreate: si True, elimina y recrea cada tabla antes de cargar.
+        cursos:   cursos académicos a extraer, p.ej. ['2026/2027'] o
+                  ['2025/2026', '2026/2027']. Por defecto solo el curso actual.
 
     Returns:
         Lista de dicts con métricas por entidad.
     """
+    cursos = cursos or ["2025/2026", "2026/2027"]
+
+    new_filter = _curso_where(cursos)
+    entities = [
+        (sf_name, ora_table, pk_col,
+         soql.replace(f"PL_Curso_academico__c = '{CURSO}'", new_filter))
+        for sf_name, ora_table, pk_col, soql in ENTITIES
+    ]
+
     start_ts = datetime.now(timezone.utc)
 
     logger.info("=" * 70)
     logger.info("FASE 1 – INGESTA SALESFORCE → ORACLE  [INICIO]")
     logger.info("Curso académico: %s | Modo: %s",
-                CURSO, "RECREAR tablas" if recreate else "upsert incremental")
+                ", ".join(cursos), "RECREAR tablas" if recreate else "upsert incremental")
     logger.info("=" * 70)
 
     sf = SalesforceExtractor()
@@ -555,7 +574,7 @@ def run(recreate: bool = False) -> list[dict]:
     results: list[dict] = []
 
     with OracleConnector() as ora:
-        for sf_name, ora_table, pk_col, soql in ENTITIES:
+        for sf_name, ora_table, pk_col, soql in entities:
             logger.info("-" * 60)
             logger.info("▶ Procesando: %s → %s", sf_name, ora_table)
             row: dict = {"sf_name": sf_name, "ora_table": ora_table}
@@ -664,8 +683,15 @@ def main(args=None):
         action="store_true",
         help="Elimina y recrea todas las tablas Oracle antes de cargar (útil en setup inicial)",
     )
+    parser.add_argument(
+        "--cursos",
+        nargs="+",
+        default=None,
+        metavar="CURSO",
+        help="Cursos académicos a extraer, p.ej. --cursos 2026/2027 o --cursos 2025/2026 2026/2027",
+    )
     parsed = parser.parse_args(args)
-    run(recreate=parsed.recreate)
+    run(recreate=parsed.recreate, cursos=parsed.cursos)
 
 
 if __name__ == "__main__":

@@ -1002,7 +1002,10 @@ def run(recreate: bool = False, include_historical: bool = False) -> None:
         df_unido_sin_etapa = df_unido.drop(columns=cols_etapa)
 
         df_definitivo = limpiar_historial_por_hitos(df_stage_t, df_unido_sin_etapa)
-        df_definitivo["FUENTE_DATOS"] = "SF_2026_27"
+        _fuente_map = {"2026/2027": "SF_2026_27", "2025/2026": "SF_2025_26"}
+        df_definitivo["FUENTE_DATOS"] = (
+            df_definitivo["PL_CURSO_ACADEMICO"].map(_fuente_map).fillna("SF_DESCONOCIDO")
+        )
         logger.info("  Dataset expandido (1 fila por etapa × oportunidad): %d filas", len(df_definitivo))
 
         # ── 11b. COMBINACIÓN CON DATOS HISTÓRICOS (opcional) ───────────────
@@ -1036,7 +1039,7 @@ def run(recreate: bool = False, include_historical: bool = False) -> None:
             df_definitivo = integrar_actividades_progresivo(df_definitivo, df_act)
         else:
             # Los datos actuales aún no tienen actividades; los históricos ya las tienen.
-            df_actual = df_definitivo[df_definitivo["FUENTE_DATOS"] == "SF_2026_27"].copy()
+            df_actual = df_definitivo[df_definitivo["FUENTE_DATOS"] != "HISTORICO"].copy()
             df_hist_ya = df_definitivo[df_definitivo["FUENTE_DATOS"] == "HISTORICO"].copy()
             df_actual = integrar_actividades_progresivo(df_actual, df_act)
             df_definitivo = pd.concat([df_actual, df_hist_ya], ignore_index=True, sort=False)

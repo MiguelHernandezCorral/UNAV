@@ -154,6 +154,7 @@ def run_pipeline(
     dry_run: bool = False,
     stop_on_error: bool = True,
     save_hist: bool = False,
+    curso: str | None = None,
 ) -> dict[str, Any]:
     """
     Ejecuta las fases del pipeline en secuencia.
@@ -193,8 +194,12 @@ def run_pipeline(
     for phase_name in fases_a_ejecutar:
         t0 = time.monotonic()
         extra = {}
-        if phase_name == "fase3":
+        if phase_name == "fase1" and curso:
+            extra = {"cursos": [curso]}
+        elif phase_name == "fase3":
             extra = {"save_hist": save_hist, "dry_run": dry_run}
+            if curso:
+                extra["curso"] = curso
         elif phase_name == "fase4":
             extra = {"dry_run": dry_run}
 
@@ -262,6 +267,12 @@ def main(args=None):
         "--save-hist", action="store_true",
         help="Guarda también en PMAT_PREDICTION_HIST (solo afecta a fase3)",
     )
+    parser.add_argument(
+        "--curso",
+        default=None,
+        metavar="CURSO",
+        help="Restringe el pipeline a un curso académico, p.ej. --curso 2026/2027",
+    )
 
     parsed = parser.parse_args(args)
 
@@ -270,6 +281,7 @@ def main(args=None):
         dry_run=parsed.dry_run,
         stop_on_error=not parsed.no_stop_on_error,
         save_hist=parsed.save_hist,
+        curso=parsed.curso,
     )
 
     # Código de salida: 1 si alguna fase falló

@@ -390,6 +390,7 @@ def run_predictions_v2(
     save_hist: bool = False,
     return_df: bool = False,
     dry_run: bool = False,
+    curso: Optional[str] = None,
 ) -> Optional[pd.DataFrame]:
     """
     Pipeline completo de predicciones V2: etapa, subetapa, target real y SHAP.
@@ -413,6 +414,11 @@ def run_predictions_v2(
     logger.info(f"Iniciando predicciones V2 — {fecha_ejecucion.isoformat()}")
 
     df_raw = load_dataset_limpio()
+
+    if curso:
+        n_before = len(df_raw)
+        df_raw = df_raw[df_raw["PL_CURSO_ACADEMICO"] == curso].copy()
+        logger.info("Filtro curso '%s': %d → %d filas", curso, n_before, len(df_raw))
 
     resultados = []
     for tipo in TIPOS:
@@ -497,6 +503,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Ejecuta sin escribir en Oracle",
     )
+    parser.add_argument(
+        "--curso",
+        default=None,
+        metavar="CURSO",
+        help="Filtra predicciones a un curso concreto, p.ej. --curso 2026/2027",
+    )
     args = parser.parse_args()
 
     if args.legacy:
@@ -506,4 +518,5 @@ if __name__ == "__main__":
             save_to_oracle=True,
             save_hist=args.save_hist,
             dry_run=args.dry_run,
+            curso=args.curso,
         )
